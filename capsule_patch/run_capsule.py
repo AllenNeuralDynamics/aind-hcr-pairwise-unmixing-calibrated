@@ -81,6 +81,11 @@ def main(argv=None):
     ap.add_argument("--output-dir", default=str(OUTPUT_DIR))
     ap.add_argument("--no-fgbg", action="store_true",
                     help="skip the fg/bg join (faster; output lacks fg/bg columns)")
+    ap.add_argument("--processed-folder", default=None,
+                    help="explicit processed-asset directory name to read acquisition.json "
+                         "and image_spot_detection from. Overrides ds_config.json's "
+                         "dataset_folder and the newest-asset fallback. Use this when "
+                         "several processed assets exist and you know which one you want.")
     ap.add_argument("--processed-root", default=None,
                     help="parent dir of processed assets; default = --data-dir")
     args = ap.parse_args(argv)
@@ -105,8 +110,9 @@ def main(argv=None):
         fgbg_status = "skipped (--no-fgbg)"
     else:
         found = [r for r in rounds
-                 if pipeline.round_inputs_from_asset(asset, args.mouse_id, r,
-                                                     args.processed_root or str(data_dir))[1]]
+                 if pipeline.round_inputs_from_asset(
+                     asset, args.mouse_id, r, args.processed_root or str(data_dir),
+                     processed_folder=args.processed_folder)[1]]
         if not found:
             fgbg_status = ("NOT AVAILABLE - no image_spot_detection/ under the processed "
                            "asset; output will have no fg/bg columns")
@@ -119,6 +125,7 @@ def main(argv=None):
     res = pipeline.run_mouse(
         asset, args.mouse_id, rounds, gene_maps,
         processed_root=args.processed_root or str(data_dir),
+        processed_folder=args.processed_folder,
         output_dir=args.output_dir,
         use_fgbg=not args.no_fgbg)
 

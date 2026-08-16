@@ -52,22 +52,71 @@ def run_round(spots, powers, gene_map, round_key, B_ctrl=None,
                 endmembers=E, endmember_info=eminfo, cellxgene=cxg)
 
 
-def round_inputs_from_asset(asset_dir, mouse_id, round_key, processed_root=None):
+def candidate_processed_assets(processed_root, mouse_id):
+    """Processed-asset directories for this mouse that carry what unmixing needs.
+
+    A directory qualifies when it has acquisition.json (laser power, required). Sorted
+    NEWEST FIRST by the trailing _processed_<timestamp> in the name, falling back to
+    mtime when the name does not parse.
+    """
+    root = Path(processed_root)
+    if not root.is_dir():
+        return []
+    hits = [p for p in root.iterdir()
+            if p.is_dir() and mouse_id in p.name and "_processed_" in p.name
+            and (p / "acquisition.json").exists()]
+
+    def key(p):
+        stamp = p.name.split("_processed_")[-1]
+        return (stamp, p.stat().st_mtime)
+
+    return sorted(hits, key=key, reverse=True)
+
+
+def round_inputs_from_asset(asset_dir, mouse_id, round_key, processed_root=None,
+                            processed_folder=None):
     """Locate this round's acquisition metadata and fg/bg stats files on disk.
 
-    asset_dir       the pairwise-unmixing asset root (contains {mouse}_{R}/ folders)
-    processed_root  parent directory holding the processed assets; when None the
-                    dataset_folder from ds_config.json is taken as already absolute.
+    asset_dir         the pairwise-unmixing asset root (contains {mouse}_{R}/ folders)
+    processed_root    parent directory holding the processed assets
+    processed_folder  explicit processed-asset directory name, overriding everything
+                      below. Use this when you know which asset you want.
 
-    Returns (acquisition_path, diag_paths) -- either may be None when unavailable, in
+    Resolution order:
+      1. `processed_folder`, if given -- the caller has decided.
+      2. `dataset_folder` from this round's ds_config.json, if that directory exists.
+         This is the asset the pairwise-unmixing outputs were generated against.
+      3. Newest processed asset for this mouse under `processed_root` that has
+         acquisition.json.
+
+    Step 3 exists because a mount may legitimately carry a different (often newer)
+    processed asset than the one named in ds_config. Which asset is right is the
+    user's call: pass `processed_folder` to force it.
+
+    Returns (acquisition_path, diag_paths); either may be None when unavailable, in
     which case the caller must supply powers explicitly and fg/bg are skipped.
     """
     rdir = Path(asset_dir) / f"{mouse_id}_{round_key}"
-    cfg = rdir / "ds_config.json"
-    if not cfg.exists():
+    root = None
+
+    if processed_folder:
+        root = (Path(processed_root) / processed_folder if processed_root
+                else Path(processed_folder))
+    else:
+        cfg = rdir / "ds_config.json"
+        if cfg.exists():
+            folder = resolve_dataset_folder(cfg)
+            cand = Path(processed_root) / folder if processed_root else Path(folder)
+            if cand.is_dir():
+                root = cand
+        if root is None and processed_root:
+            cands = candidate_processed_assets(processed_root, mouse_id)
+            if cands:
+                root = cands[0]
+
+    if root is None:
         return None, None
-    folder = resolve_dataset_folder(cfg)
-    root = Path(processed_root) / folder if processed_root else Path(folder)
+
     acq = root / "acquisition.json"
     diag = {}
     for c in CHANS:
@@ -78,7 +127,8 @@ def round_inputs_from_asset(asset_dir, mouse_id, round_key, processed_root=None)
 
 
 def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
-              powers_by_round=None, output_dir=None, use_fgbg=True, **unmix_kw):
+              powers_by_round=None, output_dir=None, use_fgbg=True,
+              processed_folder=None, **unmix_kw):
     """Unmix every round of one mouse and concatenate the cell x gene tables.
 
     Writes per-round spot tables and a combined cell x gene table when output_dir is
@@ -91,7 +141,8 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
         pkl = asset_dir / f"{mouse_id}_{round_key}" / f"mixed_spots_{round_key}.pkl"
         spots = pd.read_pickle(pkl)
         acq_path, diag = round_inputs_from_asset(
-            asset_dir, mouse_id, round_key, processed_root)
+            asset_dir, mouse_id, round_key, processed_root,
+            processed_folder=processed_folder)
         if powers_by_round and round_key in powers_by_round:
             powers = powers_by_round[round_key]
         elif acq_path:

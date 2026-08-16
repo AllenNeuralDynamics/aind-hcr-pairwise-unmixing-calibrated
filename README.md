@@ -252,8 +252,13 @@ spot-level output, so the choice can be made and revised without re-running the 
 
 ### Measured effect
 
-Marker pairs that should not co-occur in the same cells, correlation across Gad2⁺ cells,
-two mice, rounds R2–R5:
+Each value is a **Pearson correlation between two genes' per-cell transcript counts**
+(log1p-transformed), computed across Gad2⁺ cells in one mouse, rounds R2–R5. The gene
+pairs are markers of *different* interneuron subclasses, so they should rarely appear in
+the same cell: a correlation near zero or below is the expected biology, and a strongly
+positive one means one gene's spots are being counted inside the other's cells — the
+signature of unresolved crosstalk. Lower is therefore better, and the three columns are
+the same cells scored three ways.
 
 | pair | no unmixing | original pairwise | calibrated |
 |---|---|---|---|
@@ -305,7 +310,7 @@ Or from a capsule, using the entry point in `capsule_patch/`:
 python run_capsule.py --mouse-id 790322
 ```
 
-## Two traps worth knowing before you run it
+## Two things worth knowing before you run it
 
 **Laser power must come from each round's own `acquisition.json`.** It varies more than
 you would expect — R5 561 nm is 25% in mouse 804363, 15% in 800995 and 30% in 788406,
@@ -313,24 +318,32 @@ and R5 488 nm spans 5% to 30% across the same three — and β scales with the
 victim/source power ratio. A stored per-round power table in the project belongs to
 804363 alone and is wrong for every other subject.
 
-**There are often two processed assets per round**, and only one matches the spot set in
-the pairwise-unmixing asset (for 800995 R5: 2,506,903 rows versus 2,435,209). Resolve it
-from that round's `ds_config.json` → `dataset_folder`, never by timestamp. `run_round`
-raises if the fg/bg join matches under 99% of spots, which is the symptom.
+**Choosing the processed asset is yours to make.** A mouse usually has several processed
+assets, and they are not interchangeable for the fg/bg join: the per-channel
+spot-detection tables must correspond to the same detections as the spot table being
+unmixed. Resolution order:
 
-## Validation
+1. `--processed-folder <name>` — an explicit choice, which overrides everything else.
+2. `dataset_folder` from the round's `ds_config.json`, when that directory is present.
+   This names the asset the pairwise-unmixing outputs were generated against, so it is
+   the safe default.
+3. Otherwise the **newest** processed asset for that mouse carrying `acquisition.json`.
 
-Marker pairs that should not co-occur in the same cells, correlation across Gad2⁺ cells:
+Steps 2 and 3 are conveniences, not guarantees. If a mismatched asset slips through, the
+fg/bg join is the tripwire: `run_round` raises when it matches under 99% of spots rather
+than silently attaching the wrong intensities. Laser power is read from whichever asset
+is chosen, so the choice matters even with `--no-fgbg`.
 
-| pair | before unmixing | upstream pipeline | calibrated |
-|---|---|---|---|
-| Sst–Cck (800995) | 0.712 | 0.711 | 0.214 |
-| Sst–Cck (788406) | 0.717 | 0.560 | −0.345 |
-| Npy–Pvalb (788406) | 0.787 | 0.509 | −0.334 |
-| Sst–Vip (800995) | 0.441 | 0.394 | −0.317 |
+## Documentation
 
-Not everything improves: Cck–Vip regresses in both mice, a side effect of the added
-Cck→Sst direction. See the open questions in the project summary.
+[`docs/unmixing_summary.pdf`](docs/unmixing_summary.pdf) — a 14-page plain-language
+walkthrough of the whole problem and how this version addresses it, with 16 figures
+embedded. Written for someone who has not followed the development: what ghost spots are,
+why the earlier approaches fell short, what each step of the algorithm does and why, and
+what remains open. Start here if you want the reasoning rather than the API.
+
+[`docs/beta_explainer.png`](docs/beta_explainer.png) — the β figure from the section above,
+standalone.
 
 ## Layout
 
