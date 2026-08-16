@@ -20,6 +20,41 @@ Nothing in the removal rule is a tuned constant.
 or the capsule that uses it. Both remain untouched; run the calibrated version from its
 own capsule against the same data assets.
 
+## What β is
+
+β is a **bleed fraction**. For an ordered pair of channels it answers: how much intensity
+does one dye deposit in another channel, relative to how much it deposits in its own?
+
+> **β(source → victim) = (that dye's intensity in the victim channel) ÷ (its intensity in
+> its own channel)**
+
+Both readings come from the **same spot** — every detected spot carries an intensity in all
+five channels at its own location, so a single Sst transcript might read
+`[12, 30, 210, 240, 18]`: brightest in its own channel (594) but with a substantial 561
+reading that is pure bleed. β is the typical ratio of those two numbers, so it is a property
+of the dye pair and the imaging conditions, not of any individual spot.
+
+Worked example, Sst(594) → Cck(561) in mouse 800995 round 5:
+
+| | value | where it comes from |
+|---|---|---|
+| β from the single-dye control | 0.467 | separate experiment, one probe per sample |
+| laser power ratio 561/594 | 15% / 5% = 3.0 | that round's own `acquisition.json` |
+| β predicted for this round | 0.467 × 3.0 = **1.401** | control scaled to these conditions |
+| β measured on isolated spots | **1.354** | this data, spots that cannot be ghosts |
+
+A β above 1 means the bleed is *brighter* than the source's own signal, which happens when
+the victim channel is imaged at higher power. The calibrated version uses the measured value
+when it is available and the power-scaled control prediction otherwise.
+
+β is used in exactly one place: the magnitude test. A victim spot is consistent with pure
+bleed when
+
+> `victim intensity ≤ tolerance × β × source intensity`
+
+where the tolerance absorbs spot-to-spot spread around the typical ratio and is itself
+measured (see below), not assumed.
+
 ## What the calibrated version does differently
 
 The upstream pairwise stage removes crosstalk by finding same-cell overlapping spots in
@@ -30,7 +65,7 @@ is in the section that follows.
 
 | change | why |
 |---|---|
-| geometric QC gates **audited**; `dist_r` dropped | Both versions annotate rather than drop (see the detailed table below) — what changed is *which* gates are trusted. The capsule sets three: `dist < 1.25` (spot centre vs. its fitted centroid, in voxels), `r > 0.25` (correlation of the spot to the fitted PSF), and `dist_r > 1.0`. Audited over all 66M spots in mouse 800995 and 788406, rounds R2–R5: **`dist_r > 1.0` removes exactly 0%** in every round, because `dist_r` is the ratio of a spot's nearest to its second-nearest dye line and is ≥ 1 by definition. The other two do remove spots (1.6–9.9% and 0.5–7.1%), but the spots they remove are **brighter in all 20 channel-rounds** (e.g. R2 Tac: median 133 discarded vs 57 kept) and, on a crosstalk proxy, no dirtier in 13 of 20 — so they are not obviously removing junk |
+| geometric QC **not applied**; flags passed through | The original computes three gates — `dist < 1.25` (spot centre vs. its fitted centroid, in voxels), `r > 0.25` (correlation to the fitted PSF), `dist_r > 1.0` — into a `valid_spot` flag and applies it at cell × gene construction. The calibrated version applies **none** of them: `dist` and `r` are written through as raw columns and the decision is made explicitly downstream. Audited over 66,059,174 spots (both mice, R2–R5), `dist_r > 1.0` is a no-op by construction, and the other two flag mostly clumped or merged detections rather than junk — real signal a single-spot model fits badly. **Consequence:** on 800995 R5 this leaves 2,083,186 extra spots (12.2%) in the delivered table relative to the original |
 | dye lines from **spatially isolated** spots | the old "brightest in its own channel" purity rule is circular — in one mouse 93% of Sst spots peak in the Cck channel *because of* the bleed being measured. The isolated-spot estimate lands within 1° of what the single-dye control independently predicts |
 | bleed magnitude and tolerance **measured per direction** | the inherited 1.5× tolerance had no derivation. The bleed ratio is not constant: flat for bright spots, rising for dim ones (a background floor). The calibrated version fits on the bright quartile of isolated spots and measures the tolerance as an upper percentile of the same labelled set |
 | allowlist is **control-derived and bidirectional** | apparent bleed between distant channels is co-expression, not leakage — co-expressed genes are deliberately placed in non-neighbouring channels precisely because bleed there is negligible. But a pair that bleeds one way bleeds both, and the control's asymmetry does not hold in tissue (Vip/Sst: 7.6× predicted, 1.5–3.7× measured) |
@@ -57,11 +92,18 @@ exactly as before; this table is a functional comparison, not a migration notice
 | **spatial test** | `cKDTree.query_ball_point` with one isotropic radius (`min_dist`), on scaled coordinates | nearest-neighbour with an anisotropic box: 1.0 µm lateral, 1.3 µm axial, because a spot on a plane boundary can be binned one z-plane away |
 | **same-cell requirement** | yes — overlaps in different cells are skipped (`unmixer.py:420`) | yes by default (`same_cell=True`), and switchable off per call. Kept because deleting across a segmentation boundary risks removing a real transcript assigned to a neighbouring cell |
 | **laser power** | not used | read per round from that round's own `acquisition.json`; scales the control β |
-| **geometric QC** | `apply_qc_filters` sets a `valid_spot` flag from `dist < CENT_CUTOFF`, `r > CORR_CUTOFF`, `dist_r > DIST_CUTOFF`; rows are not dropped, and the flag is applied later at cell × gene construction (`cell_by_gene_table.py:76`) | same structure — flags annotated, applied downstream — but `dist_r` is dropped from the gate set, since it is a ratio of the smallest to second-smallest dye-line distance and so is ≥ 1 by construction, making `dist_r > 1.0` a no-op |
+| **geometric QC** | `apply_qc_filters` sets a `valid_spot` flag from `dist < CENT_CUTOFF`, `r > CORR_CUTOFF`, `dist_r > DIST_CUTOFF`; rows are not dropped, and the flag **is applied** at cell × gene construction (`cell_by_gene_table.py:76`) | gates are **not computed and not applied**; `dist` and `r` pass through as raw columns for the downstream step to use. On 800995 R5 that is 2,083,186 spots (12.2%) present in the calibrated cell × gene table that the original would have excluded |
 | **spots with no partner** | kept, untouched | reassigned when the spectral evidence is strong; this is the rare case |
 | **undecidable spots** | no such category | flagged `v3_ambiguous` and kept when predicted bleed falls under the victim channel's noise floor |
 | **output** | filtered table: deleted spots are dropped, `unmixed_chan` = original channel | every input spot survives, with `v3_action`, `v3_chan`, `decision_rule`, `beta_used`, `beta_source`, NNLS coefficients, QC flags, and raw `fg` / `bg` |
 | **iteration** | `keep` mask mutated in place across pairs, so a spot removed by one pair is invisible to later pairs | single pass; each direction is evaluated against the full spot set |
+
+> **Migration note.** Because the calibrated version does not apply the geometric gates,
+> its cell × gene counts are not directly comparable to the original's: on 800995 R5,
+> 2,083,186 spots (12.2% of the delivered table) are present that the original would have
+> excluded, *in addition to* every difference the unmixing itself makes. When comparing
+> tables from the two pipelines, either apply `dist < 1.25 & r > 0.25` to the calibrated
+> output first, or expect a systematic offset of roughly this size.
 
 ### Why each change was made
 
@@ -110,13 +152,30 @@ larger one, so it is ≥ 1 for every spot by construction, and `> 1.0` therefore
 0.00% in all four rounds. (The engine's own default is 4, which would remove 48–85%
 depending on the round — a very different gate. The capsule overrides it to 1.0.)
 
-`dist` and `r` do remove spots — 1.6–9.9% and 0.5–7.1% depending on channel — but the
-spots they remove do not look like junk. In **all 20** round × channel combinations the
-discarded spots are *brighter* in their own channel than the kept ones (R2 Tac: median 133
-vs 57; R3 Calb1: 160 vs 135). On a crosstalk proxy they are no dirtier than the kept spots
-in 13 of 20. Whatever `dist` and `r` are selecting against, it is not contamination and it
-is not dimness. That is why the calibrated version passes the flags through and leaves the
-choice to the cell × gene step rather than treating the thresholds as settled.
+`dist` and `r` do remove spots — 1.6–9.9% and 0.5–7.1% depending on channel. In **all 20**
+round × channel combinations the spots they discard are *brighter* in their own channel than
+the ones they keep (R2 Tac: median 133 vs 57; R3 Calb1: 160 vs 135). Two readings of that
+are possible and they were tested against each other:
+
+*Autofluorescence?* Bright non-transcript blobs would be bright in **every** channel, giving
+an own-channel-to-other-channel ratio near 1. Measured on 800995 R5, the ratio *rises* when
+the gate fails in four of five channels (638: 2.56 → 8.39; 514: 2.46 → 5.62), so the
+discarded spots are **more** spectrally specific than the kept ones, not less. They do not
+look like flat-spectrum autofluorescence.
+
+*Saturated or merged spots?* Profiling `dist` and `r` against brightness within one channel
+shows both degrade as spots get brighter — in 594/Sst the failure rate climbs from 0.3% in
+the dimmest sixth to 17% around 377 counts. A tight cluster of transcripts fits a
+single-spot PSF badly, so these gates are largely flagging **clumped or merged detections**:
+real signal, but with a position and an amplitude that a single-spot model cannot represent.
+
+Neither answer justifies discarding them silently, and neither justifies keeping them
+unconditionally — a merged detection of three transcripts counted once undercounts, and its
+centroid is unreliable. So the calibrated version computes nothing and applies nothing:
+`dist` and `r` pass through as raw columns alongside `fg`, `bg` and `fg_over_bg`, and the
+filtering decision is made explicitly at cell × gene construction. **This differs from the
+original**, which applies its `valid_spot` flag there; see the note below on the size of
+that difference.
 
 **Co-location tested against a displaced null.** "The victim spot has a source spot on top
 of it" is only evidence if spots don't land on top of each other by chance at these
@@ -144,6 +203,23 @@ real Cck spots are *dimmer* than true bleed into that channel (median 113 vs 180
 **Filtered output → annotated output.** A deleted row cannot be audited or reversed.
 Downstream steps need to make their own thresholding decisions, which requires the raw
 foreground and local background the original discards in favour of their difference.
+
+### Still to decide: the delivered cell × gene table
+
+The capsule should emit a cell × gene table alongside the spot-level results, which means
+choosing filters — geometric and intensity — rather than leaving them implicit. Nothing is
+settled here yet; what the audit has established so far:
+
+| candidate filter | measured effect | status |
+|---|---|---|
+| `dist < 1.25 & r > 0.25` (the original's) | removes 12.2% on 800995 R5; the removed spots are brighter and more spectrally specific, consistent with clumped/merged detections | not applied; flags available |
+| `dist_r > 1.0` | removes 0.00% by construction | dropped |
+| `FG ≥ median(BG) + 2·MAD(BG)` per channel | removes 8.7–18.9% (800995) and 6.1–9.6% (788406); improves 9 of 16 marker-pair correlations but regresses Lamp5–Calb2 by +0.27 in **both** mice and costs 1,802 Gad2⁺ cells in one mouse against 18 in the other | tested, not adopted |
+| per-spot `FG > 1.5 × BG` | removes 22–42%; the most even across channels because it means the same thing in each | untested end-to-end |
+| `median(FG)` or `median(FG) − k·SD(FG)` | the first is a 50% rank cut by construction; the second is inert (negative in all five channels) | rejected |
+
+The columns needed for any of these — `dist`, `r`, `fg`, `bg`, `fg_over_bg` — are all in the
+spot-level output, so the choice can be made and revised without re-running the unmixer.
 
 ### Measured effect
 
