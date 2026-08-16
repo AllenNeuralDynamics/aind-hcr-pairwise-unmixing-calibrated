@@ -81,6 +81,8 @@ def main(argv=None):
     ap.add_argument("--output-dir", default=str(OUTPUT_DIR))
     ap.add_argument("--no-fgbg", action="store_true",
                     help="skip the fg/bg join (faster; output lacks fg/bg columns)")
+    ap.add_argument("--no-anndata", action="store_true",
+                    help="skip the annotated .h5ad (class/subclass/cluster labels)")
     ap.add_argument("--experimenter", default=None,
                     help="name recorded as processor_full_name in processing.json")
     ap.add_argument("--no-metadata", action="store_true",
@@ -133,6 +135,7 @@ def main(argv=None):
         output_dir=args.output_dir,
         use_fgbg=not args.no_fgbg,
         write_metadata=not args.no_metadata,
+        write_anndata=not args.no_anndata,
         experimenter=args.experimenter)
 
     print("\nper-channel spot change:")
@@ -151,6 +154,15 @@ def main(argv=None):
         else:
             print("  derived asset : no parent data_description.json found - "
                   "data_description.json NOT written")
+    if res.get("anndata"):
+        import anndata as _ad
+        _a = _ad.read_h5ad(res["anndata"])
+        print(f"\nannotated: {Path(res['anndata']).name}  "
+              f"{_a.n_obs:,} cells x {_a.n_vars} genes")
+        print(f"  class   : {dict(_a.obs['class'].value_counts())}")
+        n_cl = int((_a.obs['cluster_id'] >= 0).sum())
+        print(f"  clusters: {_a.obs.loc[_a.obs.cluster_id >= 0, 'cluster'].nunique()}"
+              f" over {n_cl:,} classified cells")
     print(f"written to {args.output_dir}")
     return 0
 

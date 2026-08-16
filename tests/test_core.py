@@ -269,3 +269,109 @@ def test_no_data_description_written_without_parent(tmp_path):
     empty.mkdir()
     assert M.derived_data_description(empty, out) is None
     assert not (out / "data_description.json").exists()
+
+
+# ---------------------------------------------------------------- annotation
+
+
+def _fake_table(n_inh=600, n_exc=900, seed=0):
+    """Cell x gene counts with a known inhibitory/excitatory split and subclasses."""
+    rng = np.random.RandomState(seed)
+    genes = ["R1-561-Slc17a7", "R4-638-Gad2", "R5-514-Pvalb", "R5-594-Sst",
+             "R5-638-Vip", "R4-488-Lamp5", "R5-561-Cck", "R3-514-Mme"]
+    rows = []
+    for i in range(n_inh):
+        v = rng.poisson(8, len(genes)).astype(float)
+        v[0] = rng.poisson(2)          # Slc17a7 low
+        v[1] = rng.poisson(300)        # Gad2 high
+        v[2 + (i % 4)] = rng.poisson(400)   # one subclass marker high
+        rows.append(v)
+    for _ in range(n_exc):
+        v = rng.poisson(8, len(genes)).astype(float)
+        v[0] = rng.poisson(400)        # Slc17a7 high
+        v[1] = rng.poisson(2)          # Gad2 low
+        rows.append(v)
+    idx = [f"cell{i}" for i in range(n_inh + n_exc)]
+    return pd.DataFrame(np.array(rows), index=idx, columns=genes)
+
+
+def test_class_labels_need_a_positive_marker():
+    """Without Slc17a7 nothing may be called excitatory."""
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table()
+    cls, info = A.assign_class(t)
+    assert set(cls.unique()) == {"inhibitory", "excitatory"}
+
+    no_exc = t.drop(columns=["R1-561-Slc17a7"])
+    cls2, info2 = A.assign_class(no_exc)
+    assert "excitatory" not in set(cls2.unique())          # never asserted
+    assert info2["markers_available"]["excitatory"] is None
+    assert (cls2 == "inhibitory").sum() == (cls == "inhibitory").sum()
+
+
+def test_double_positive_is_unassigned():
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table(n_inh=10, n_exc=10)
+    t.iloc[0, t.columns.get_loc("R1-561-Slc17a7")] = 500     # both markers high
+    cls, info = A.assign_class(t)
+    assert cls.iloc[0] == "unassigned"
+    assert info["n_double_positive"] == 1
+
+
+def test_normalization_is_reversible_in_shape_and_bounded():
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table()
+    norm, info = A.normalize_cellxgene(t)
+    assert norm.shape == t.shape
+    assert float(norm.to_numpy().max()) <= 1.0 + 1e-9        # clipped at the 95th pct
+    assert float(norm.to_numpy().min()) >= 0.0
+    assert info["depth_scale"] == "median"
+
+
+def test_clusters_named_by_subclass_and_numbered():
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table()
+    norm, _ = A.normalize_cellxgene(t)
+    cls, _ = A.assign_class(t)
+    labels, cid, subclass, info = A.cluster_by_class(norm, cls, n_inh=4, n_exc=3)
+
+    inh_names = set(labels[cls == "inhibitory"].unique())
+    exc_names = set(labels[cls == "excitatory"].unique())
+    # A marker suffix appears only when a gene clears the enrichment floor. The
+    # synthetic excitatory cells are homogeneous by construction, so some Exc
+    # clusters legitimately have no distinguishing marker and no suffix -- naming
+    # one anyway would be inventing structure. Inhibitory cells DO differ by
+    # subclass here, so every inhibitory cluster must carry markers.
+    assert all("(" in n and ")" in n for n in inh_names)
+    assert all(n.startswith("Exc-") for n in exc_names)
+    # inhibitory clusters carry a canonical subclass prefix
+    assert any(n.split("-")[0] in A.SUBCLASS_GENES for n in inh_names)
+    # ids are unique across the two independently-clustered groups
+    assert cid[cls == "inhibitory"].nunique() == 4
+    assert cid[cls == "excitatory"].nunique() == 3
+    assert not (set(cid[cls == "inhibitory"]) & set(cid[cls == "excitatory"]))
+
+
+def test_anndata_keeps_raw_counts_in_X():
+    """X must be untransformed counts; the clustering matrix lives in a layer."""
+    pytest.importorskip("anndata")
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table()
+    adata = A.build_anndata(t, n_inh=4, n_exc=3)
+    # build_anndata sorts cells by id, so compare against the same ordering rather
+    # than the input order (cell10 sorts before cell2).
+    assert list(adata.obs_names) == sorted(t.index.astype(str))
+    assert np.allclose(adata.X, t.loc[adata.obs_names].to_numpy())   # raw, not normalized
+    assert "normalized" in adata.layers
+    assert adata.layers["normalized"].max() <= 1.0 + 1e-9
+    assert {"class", "subclass", "cluster", "cluster_id"} <= set(adata.obs.columns)
+    assert set(adata.var.columns) == {"round", "channel", "gene"}
+    assert adata.n_obs == len(t)
+    # every cell of a known class gets a cluster
+    known = adata.obs["class"].isin(["inhibitory", "excitatory"])
+    assert (adata.obs.loc[known, "cluster_id"] >= 0).all()

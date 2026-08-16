@@ -130,7 +130,7 @@ def round_inputs_from_asset(asset_dir, mouse_id, round_key, processed_root=None,
 def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
               powers_by_round=None, output_dir=None, use_fgbg=True,
               processed_folder=None, write_metadata=True, experimenter=None,
-              **unmix_kw):
+              write_anndata=True, **unmix_kw):
     """Unmix every round of one mouse and concatenate the cell x gene tables.
 
     Writes per-round spot tables and a combined cell x gene table when output_dir is
@@ -189,6 +189,18 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
         result["separability"].to_csv(outp / f"{mouse_id}_separability_calibrated.csv", index=False)
         result["decisions"].to_csv(outp / f"{mouse_id}_decisions_calibrated.csv", index=False)
         result["summary"].to_csv(outp / f"{mouse_id}_spot_change_calibrated.csv", index=False)
+        if write_anndata:
+            try:
+                from . import annotate
+                adata = annotate.build_anndata(
+                    table, extra_uns=dict(mouse_id=mouse_id, rounds=list(rounds)))
+                h5 = outp / f"{mouse_id}_cellxgene_annotated.h5ad"
+                adata.write_h5ad(h5)
+                result["anndata"] = str(h5)
+            except ImportError as exc:
+                # anndata is an optional extra; a missing package must not lose the
+                # unmixing results that already succeeded.
+                print(f"WARNING: AnnData not written ({exc}). pip install anndata")
         if write_metadata:
             result["metadata"] = _write_asset_metadata(
                 asset_dir, mouse_id, rounds, outp, processed_root, processed_folder,
@@ -231,7 +243,8 @@ def _write_asset_metadata(asset_dir, mouse_id, rounds, outp, processed_root,
         outputs={"cellxgene": f"{mouse_id}_cellxgene_calibrated.csv",
                  "spots": [f"{mouse_id}_{r}_unmixed_calibrated.parquet" for r in rounds],
                  "decisions": f"{mouse_id}_decisions_calibrated.csv",
-                 "spot_change": f"{mouse_id}_spot_change_calibrated.csv"},
+                 "spot_change": f"{mouse_id}_spot_change_calibrated.csv",
+                 "annotated_cellxgene": f"{mouse_id}_cellxgene_annotated.h5ad"},
         notes=(f"{int(summ.n_detected.sum()):,} spots in, "
                f"{int(summ.n_final.sum()):,} out across {len(rounds)} round(s). "
                "Geometric QC flags are annotated, not applied."),

@@ -385,6 +385,44 @@ referenced in the note rather than downgraded. Migrating to 2.x is a deliberate 
 step for the whole asset at once; `metadata.upgrade_note()` records what it involves,
 and the 2.x construction has been verified to validate under aind-data-schema 2.8.1.
 
+## Annotated cell × gene table (AnnData)
+
+Alongside the spot tables, the capsule writes `<mouse>_cellxgene_annotated.h5ad`:
+
+| slot | contents |
+|---|---|
+| `X` | **raw** transcript counts, all cells × all genes |
+| `layers["normalized"]` | the matrix clustering ran on: per-cell counts ÷ cell total × median cell total, then each gene ÷ its 95th percentile, clipped to 1 |
+| `obs` | `class`, `subclass`, `cluster`, `cluster_id`, marker counts, `total_counts`, `n_genes` |
+| `var` | `round`, `channel`, `gene` per column |
+| `uns["unmixing"]` | every parameter the labels were computed with |
+
+Both matrices are stored rather than one: a reader who wants counts should not have to
+invert a normalization, and a reader reproducing the clustering should not have to guess
+how it was done.
+
+**Clusters** come from k-means run **separately on excitatory and inhibitory cells**,
+then merged — one joint clustering spends most of its clusters separating the two
+classes instead of resolving structure within them. Names are subclass-first with the
+most *enriched* genes appended (enrichment, not raw level, so an abundant gene does not
+name every cluster): `Pvalb-2 (Pvalb/Mme/Pthlh)`, `Lamp5-1 (Lamp5/Reln/Hpse)`,
+`Exc-1 (...)`. A cluster with no gene above the enrichment floor gets no suffix rather
+than an invented one.
+
+**Class labels require R1.** The only excitatory marker in the panel is `Slc17a7`, imaged
+in **R1** (`488=GFP, 561=Slc17a7`); `Gad2` is in R4. A cell positive for exactly one
+marker gets that class; positive for both, or neither, gets `unassigned` — those are the
+cells worth inspecting, and forcing them into a class would hide them. **Run R1 and R4
+together to get class labels**; without R1 nothing is called excitatory, because "not
+Gad2⁺" would sweep in low-quality cells, mis-segmented cells and non-neuronal cells
+alike. `uns` records which markers were available.
+
+R1 is cheap to include: it has only two channels, 488 and 561, which are two apart, so
+the control allowlist admits no direction between them and its unmixing is close to a
+no-op. It is there for the class marker, not for crosstalk removal.
+
+Pass `--no-anndata` to skip this step.
+
 ## Layout
 
 ```
