@@ -135,23 +135,30 @@ def _kmeans(matrix, k, seed=RANDOM_SEED):
 
 
 def cluster_marker_names(cluster_means, prefix_by_cluster, n_markers=3,
-                         min_enrichment=1.25):
+                         min_enrichment=1.25, exclude_genes=SUBCLASS_GENES):
     """Name each cluster `<prefix>-<n> (GeneA/GeneB/GeneC)`.
 
     Markers are the genes most ENRICHED in the cluster -- cluster mean divided by the
     mean across all clusters in the same group -- not the highest raw values, so an
     abundant gene does not name every cluster. Numbering runs within each prefix.
+
+    `exclude_genes` are barred from the marker list, defaulting to the canonical
+    subclass genes. Those already appear as the prefix, so listing them again wastes a
+    slot: `Pvalb-2 (Pvalb/Mme/Pthlh)` says less than `Pvalb-2 (Mme/Pthlh/Tac)`. The
+    subclass call itself is unaffected -- assign_subclass still uses those genes.
     """
     overall = cluster_means.mean(0)
     overall[overall <= 0] = 1e-9
     enrich = cluster_means / overall
+    barred = set(exclude_genes or ())
 
     counter, names = {}, {}
     for cid in cluster_means.index:
         prefix = prefix_by_cluster[cid]
         counter[prefix] = counter.get(prefix, 0) + 1
         e = enrich.loc[cid].sort_values(ascending=False)
-        marks = [str(g).split("-")[-1] for g, v in e.items() if v >= min_enrichment][:n_markers]
+        marks = [str(g).split("-")[-1] for g, v in e.items()
+                 if v >= min_enrichment and str(g).split("-")[-1] not in barred][:n_markers]
         names[cid] = (f"{prefix}-{counter[prefix]}"
                       + (f" ({'/'.join(marks)})" if marks else ""))
     return names

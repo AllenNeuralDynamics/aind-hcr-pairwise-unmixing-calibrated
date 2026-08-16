@@ -403,19 +403,31 @@ how it was done.
 
 **Clusters** come from k-means run **separately on excitatory and inhibitory cells**,
 then merged — one joint clustering spends most of its clusters separating the two
-classes instead of resolving structure within them. Names are subclass-first with the
-most *enriched* genes appended (enrichment, not raw level, so an abundant gene does not
-name every cluster): `Pvalb-2 (Pvalb/Mme/Pthlh)`, `Lamp5-1 (Lamp5/Reln/Hpse)`,
-`Exc-1 (...)`. A cluster with no gene above the enrichment floor gets no suffix rather
-than an invented one.
+classes instead of resolving structure within them.
+
+Names are subclass-first with the most *enriched* genes appended — enrichment against
+the across-cluster mean, not raw level, so an abundant gene does not name every cluster.
+The canonical subclass genes (`Pvalb`, `Sst`, `Vip`, `Lamp5`) are **excluded from the
+marker list**, since the subclass is already the prefix and repeating it wastes a slot:
+
+```
+Pvalb-2 (Mme/Pthlh/Gad2)        Pvalb-4 (Mme/Pthlh/Tac)
+Lamp5-1 (Reln/Hpse/Ndnf)        Vip-3 (Tac2/Crh/Npy)
+Sst-4 (Calb1/Npy/Calb2)         Exc-1 (...)
+```
+
+The subclass *call* still uses those genes; only the marker list excludes them. A
+cluster with no non-subclass gene above the enrichment floor gets no suffix rather than
+an invented one.
 
 **Class labels require R1.** The only excitatory marker in the panel is `Slc17a7`, imaged
 in **R1** (`488=GFP, 561=Slc17a7`); `Gad2` is in R4. A cell positive for exactly one
 marker gets that class; positive for both, or neither, gets `unassigned` — those are the
-cells worth inspecting, and forcing them into a class would hide them. **Run R1 and R4
-together to get class labels**; without R1 nothing is called excitatory, because "not
-Gad2⁺" would sweep in low-quality cells, mis-segmented cells and non-neuronal cells
-alike. `uns` records which markers were available.
+cells worth inspecting, and forcing them into a class would hide them. **Always include R1 and R4**; without R1 nothing is called
+excitatory, because "not Gad2⁺" would sweep in low-quality cells, mis-segmented cells
+and non-neuronal cells alike. Round discovery picks up every round present by default,
+and passing `--rounds` without R1 or R4 prints a warning rather than quietly producing
+an unlabelled table. `uns` records which markers were available.
 
 R1 is cheap to include: it has only two channels, 488 and 561, which are two apart, so
 the control allowlist admits no direction between them and its unmixing is close to a

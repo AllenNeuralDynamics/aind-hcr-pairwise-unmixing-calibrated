@@ -285,6 +285,9 @@ def _fake_table(n_inh=600, n_exc=900, seed=0):
         v[0] = rng.poisson(2)          # Slc17a7 low
         v[1] = rng.poisson(300)        # Gad2 high
         v[2 + (i % 4)] = rng.poisson(400)   # one subclass marker high
+        # a secondary, non-subclass marker co-varying with the subclass, so cluster
+        # names still have something to report once subclass genes are excluded
+        v[6 + (i % 2)] = rng.poisson(200)   # Cck or Mme
         rows.append(v)
     for _ in range(n_exc):
         v = rng.poisson(8, len(genes)).astype(float)
@@ -347,7 +350,12 @@ def test_clusters_named_by_subclass_and_numbered():
     # clusters legitimately have no distinguishing marker and no suffix -- naming
     # one anyway would be inventing structure. Inhibitory cells DO differ by
     # subclass here, so every inhibitory cluster must carry markers.
+    # subclass genes are excluded from marker lists, so a name carries a suffix only
+    # when the cluster has a distinguishing NON-subclass gene; the fixture gives
+    # inhibitory cells a secondary marker so they do
     assert all("(" in n and ")" in n for n in inh_names)
+    assert not any("(Pvalb" in n or "(Sst" in n or "(Vip" in n or "(Lamp5" in n
+                   for n in inh_names)
     assert all(n.startswith("Exc-") for n in exc_names)
     # inhibitory clusters carry a canonical subclass prefix
     assert any(n.split("-")[0] in A.SUBCLASS_GENES for n in inh_names)
@@ -394,3 +402,37 @@ def test_anndata_round_trips_to_h5ad(tmp_path):
     assert set(back.obs["cluster"].unique()) == set(adata.obs["cluster"].unique())
     assert "normalized" in back.layers
     assert np.allclose(back.X, adata.X)
+
+
+def test_subclass_genes_excluded_from_marker_names():
+    """Pvalb-2 (Pvalb/...) wastes a slot -- the subclass is already the prefix."""
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    means = pd.DataFrame(
+        {"R5-514-Pvalb": [10.0, 1.0],       # subclass gene, strongly enriched
+         "R3-514-Mme":   [8.0, 1.0],
+         "R2-561-Pthlh": [6.0, 1.0],
+         "R5-561-Cck":   [1.0, 9.0]},
+        index=[0, 1])
+    names = A.cluster_marker_names(means, {0: "Pvalb", 1: "Vip"})
+
+    assert "Pvalb" not in names[0].split("(")[1]        # not in the marker list
+    assert names[0].startswith("Pvalb-1")               # still the prefix
+    assert "Mme" in names[0] and "Pthlh" in names[0]    # replaced by the next best
+    # opting out restores the old behaviour
+    keep = A.cluster_marker_names(means, {0: "Pvalb", 1: "Vip"}, exclude_genes=())
+    assert "Pvalb" in keep[0].split("(")[1]
+
+
+def test_subclass_call_still_uses_subclass_genes():
+    """Excluding them from NAMES must not affect the subclass assignment itself."""
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    means = pd.DataFrame(
+        {"R5-514-Pvalb": [10.0, 1.0],
+         "R5-594-Sst":   [1.0, 10.0],
+         "R5-561-Cck":   [5.0, 5.0]},
+        index=[0, 1])
+    sc = A.assign_subclass(means)
+    assert sc[0][0] == "Pvalb"
+    assert sc[1][0] == "Sst"

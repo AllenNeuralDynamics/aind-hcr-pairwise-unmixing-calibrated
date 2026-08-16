@@ -76,7 +76,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--mouse-id", required=True)
     ap.add_argument("--rounds", nargs="*", default=None,
-                    help="subset of rounds; default = every round present")
+                    help="subset of rounds; default = every round present. Include R1 "
+                         "(Slc17a7) and R4 (Gad2) or cells cannot be classified.")
     ap.add_argument("--data-dir", default=str(DATA_DIR))
     ap.add_argument("--output-dir", default=str(OUTPUT_DIR))
     ap.add_argument("--no-fgbg", action="store_true",
@@ -99,6 +100,23 @@ def main(argv=None):
     data_dir = Path(args.data_dir)
     asset = find_asset(args.mouse_id, data_dir)
     rounds = args.rounds or discover_rounds(asset, args.mouse_id)
+
+    # R1 carries Slc17a7, the only excitatory marker in the panel, and R4 carries
+    # Gad2. Without both, build_anndata cannot assign a class and every cell comes
+    # back "unassigned" with no clusters -- a silent loss if the user simply forgot
+    # a round. Warn loudly rather than produce an unlabelled AnnData.
+    if not args.no_anndata:
+        available = set(discover_rounds(asset, args.mouse_id))
+        missing = [r for r in ("R1", "R4") if r not in rounds and r in available]
+        if missing:
+            print(f"WARNING: {' and '.join(missing)} available but not selected. "
+                  f"R1 has Slc17a7 (excitatory) and R4 has Gad2 (inhibitory); "
+                  f"without both, cells cannot be classified and the AnnData will "
+                  f"carry no cluster labels.")
+        absent = [r for r in ("R1", "R4") if r not in available]
+        if absent:
+            print(f"NOTE: {' and '.join(absent)} not present in this asset; "
+                  f"class labels need R1 (Slc17a7) and R4 (Gad2).")
     if not rounds:
         raise SystemExit(f"no rounds with mixed_spots_*.pkl under {asset}")
     gene_maps = {r: gene_map_for_round(asset, args.mouse_id, r) for r in rounds}
