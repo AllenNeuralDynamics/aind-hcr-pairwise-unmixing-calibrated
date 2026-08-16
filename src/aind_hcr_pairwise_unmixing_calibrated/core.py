@@ -1,4 +1,4 @@
-"""Core v5 unmixing algorithm.
+"""Core calibrated unmixing algorithm.
 
 Vendored from the interactive development session; this module has NO dependency on
 aind_spot_spectral_unmixing and does not import anything from the upstream engine. It

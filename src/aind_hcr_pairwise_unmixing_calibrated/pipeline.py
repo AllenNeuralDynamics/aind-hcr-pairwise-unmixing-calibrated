@@ -108,7 +108,7 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
             frame.insert(0, "mouse", mouse_id)
         seps.append(res["separability"])
         logs.append(res["decisions"])
-        cxgs.append(res["cellxgene"].assign(arm="v5"))
+        cxgs.append(res["cellxgene"].assign(arm="calibrated"))
         for c in CHANS:
             n_det = int((res["spots"].chan == c).sum())
             n_fin = int(((res["spots"].v3_chan == c)

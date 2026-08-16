@@ -2,7 +2,7 @@
 
 The delivered mixed_spots_{R}.pkl keeps only FG - BG, which cannot distinguish 300 over
 a background of 100 from 300 over a background of 900. Local BG varies ~3x within a
-single channel, so the pair carries information the difference discards. v5 writes both
+single channel, so the pair carries information the difference discards. This version writes both
 columns UNFILTERED and leaves thresholding to cell x gene construction.
 
 Two traps, both hit during development and both silent if you get them wrong:

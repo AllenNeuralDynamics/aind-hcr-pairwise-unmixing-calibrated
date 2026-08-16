@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Capsule entry point for v5 unmixing.
+"""Capsule entry point for calibrated pairwise unmixing.
 
 Drop-in alternative to the upstream `run_capsule.py`. It does NOT import
 aind_spot_spectral_unmixing and does not touch the upstream engine or its capsule; it

@@ -1,10 +1,11 @@
-"""HCR pairwise spot unmixing, v5.
+"""HCR pairwise spot unmixing, calibrated.
 
 A standalone reimplementation of the crosstalk-removal stage. It does NOT import from
 or modify aind-spot-spectral-unmixing; the upstream engine and its capsule are
 untouched.
 
-What v5 changes relative to the pairwise stage in the upstream engine:
+What the calibrated version changes relative to the pairwise stage in the upstream
+engine -- every quantity below is tied to an independent measurement rather than tuned:
 
   * takes the FULL spot table -- geometric QC is annotated, not applied
   * dye lines (endmembers) estimated from SPATIALLY ISOLATED spots, not self-peaking
@@ -15,7 +16,7 @@ What v5 changes relative to the pairwise stage in the upstream engine:
   * the allowlist is control-derived and BIDIRECTIONAL: both directions of any pair the
     single-dye control certifies as bleeding. Distant pairs are never admitted -- an
     elevated in-tissue ratio there is co-expression, by panel design
-  * deletion requires spatial co-location AND magnitude AND spectral evidence;
+  * deletion requires same-cell spatial co-location AND magnitude AND spectral evidence;
     reassignment is the rare no-partner case; undecidable spots are flagged and kept
   * output is UNFILTERED and carries raw fg / local bg per spot
 
