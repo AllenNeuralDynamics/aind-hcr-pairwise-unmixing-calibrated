@@ -20,41 +20,6 @@ Nothing in the removal rule is a tuned constant.
 or the capsule that uses it. Both remain untouched; run the calibrated version from its
 own capsule against the same data assets.
 
-## What β is
-
-β is a **bleed fraction**. For an ordered pair of channels it answers: how much intensity
-does one dye deposit in another channel, relative to how much it deposits in its own?
-
-> **β(source → victim) = (that dye's intensity in the victim channel) ÷ (its intensity in
-> its own channel)**
-
-Both readings come from the **same spot** — every detected spot carries an intensity in all
-five channels at its own location, so a single Sst transcript might read
-`[12, 30, 210, 240, 18]`: brightest in its own channel (594) but with a substantial 561
-reading that is pure bleed. β is the typical ratio of those two numbers, so it is a property
-of the dye pair and the imaging conditions, not of any individual spot.
-
-Worked example, Sst(594) → Cck(561) in mouse 800995 round 5:
-
-| | value | where it comes from |
-|---|---|---|
-| β from the single-dye control | 0.467 | separate experiment, one probe per sample |
-| laser power ratio 561/594 | 15% / 5% = 3.0 | that round's own `acquisition.json` |
-| β predicted for this round | 0.467 × 3.0 = **1.401** | control scaled to these conditions |
-| β measured on isolated spots | **1.354** | this data, spots that cannot be ghosts |
-
-A β above 1 means the bleed is *brighter* than the source's own signal, which happens when
-the victim channel is imaged at higher power. The calibrated version uses the measured value
-when it is available and the power-scaled control prediction otherwise.
-
-β is used in exactly one place: the magnitude test. A victim spot is consistent with pure
-bleed when
-
-> `victim intensity ≤ tolerance × β × source intensity`
-
-where the tolerance absorbs spot-to-spot spread around the typical ratio and is itself
-measured (see below), not assumed.
-
 ## What the calibrated version does differently
 
 The upstream pairwise stage removes crosstalk by finding same-cell overlapping spots in
@@ -71,6 +36,70 @@ is in the section that follows.
 | allowlist is **control-derived and bidirectional** | apparent bleed between distant channels is co-expression, not leakage — co-expressed genes are deliberately placed in non-neighbouring channels precisely because bleed there is negligible. But a pair that bleeds one way bleeds both, and the control's asymmetry does not hold in tissue (Vip/Sst: 7.6× predicted, 1.5–3.7× measured) |
 | deletion needs spatial **and** magnitude **and** spectral evidence; undecidable spots flagged, not deleted | *Is co-location meaningful, or would spots land on top of each other anyway at this density?* Test: shift every source spot 24 µm sideways and re-run the search. On directions the control certifies as bleeding, real co-location runs **212–870× above** that shifted control, so a partner is genuine evidence rather than crowding. But the brightness test has a limit: a source spot dim enough that its *predicted* bleed (β × source) falls at or below the victim channel's own noise floor — taken as the 10th percentile of that channel's intensities — gives the test no dynamic range. Such spots are marked `v3_ambiguous` and kept, rather than silently deleted or silently retained |
 | output **unfiltered**, carrying raw fg and local bg | the delivered table keeps only FG−BG, which cannot tell 300-over-100 from 300-over-900. Retaining `fg`, `bg` and their difference in the result allows intensity thresholding prior to cell × gene construction if desired |
+
+## What β is
+
+β is a **bleed fraction**. For an ordered pair of channels it answers: how much intensity
+does one dye deposit in another channel, relative to how much it deposits in its own?
+
+> **β(source → victim) = (that dye's intensity in the victim channel) ÷ (its intensity in
+> its own channel)**
+
+Both readings come from the **same spot** — every detected spot carries an intensity in all
+five channels at its own location, so a single Sst transcript might read
+`[12, 30, 210, 240, 18]`: brightest in its own channel (594) but with a substantial 561
+reading that is pure bleed. β is the typical ratio of those two numbers, so it is a property
+of the dye pair and the imaging conditions, not of any individual spot.
+
+![What beta is and how it is measured](docs/beta_explainer.png)
+
+*Sst(594) → Cck(561) in mouse 800995 round 5.* **A** one real spot's five readings: 496 in
+Cck's channel with no Cck molecule present, 300 in its own. **B** β is that ratio, 1.65 for
+this spot. **C** the estimation pool: 1,981,893 Sst spots → 168,585 spatially isolated →
+42,146 in the brightest quartile. **D** three independent routes converge — control 0.467,
+control × power ratio 1.401, measured on isolated spots 1.354. **E** the test in the
+intensity plane; gold is pure bleed, blue is genuine Cck, dashed is the deletion boundary.
+**F** the tolerance is measured per direction and per mouse, not assumed.
+
+A β above 1 means the bleed reads *brighter* than the source's own signal, which happens
+when the victim channel is imaged at higher power — here 561 at 15% against 594 at 5%. The
+calibrated version uses the measured value when available and the power-scaled control
+prediction otherwise.
+
+β is used in exactly one place, the magnitude test. A victim spot is consistent with pure
+bleed when
+
+> `victim intensity ≤ tolerance × β × source intensity`
+
+### The tolerance
+
+β is a *median* — the typical bleed ratio — but individual spots scatter around it, so a
+strict `victim ≤ β × source` test would reject half of all true bleed. The tolerance is that
+allowance, and it is **measured, not chosen**: spatially isolated source spots are a
+labelled ground-truth set (their victim-channel reading is pure bleed by construction), so
+the tolerance is simply an upper percentile of observed ÷ predicted on that set.
+
+The percentile is a recall/precision dial, measured here for Sst→Cck in 800995:
+
+| percentile | tolerance | catches this much true bleed | sweeps in this much genuine Cck |
+|---|---|---|---|
+| p75 | 1.43 | 75% | 1.6% |
+| **p90** (default) | **2.77** | **90%** | **4.6%** |
+| p95 | 3.65 | 95% | 7.3% |
+| p99 | 5.93 | 99% | 23.1% |
+
+p99 is where it breaks down — catching the last 1% of bleed costs a quarter of the genuine
+signal.
+
+**It is not one number for all channels.** Measured across the ten allowlisted directions it
+spans **1.98 to 5.29**, a 2.7× range, and the same direction differs between mice (Npy→Pvalb:
+2.12 in 800995, 5.29 in 788406). That spread is the argument against the inherited constant
+of 1.5, which sits below every measured value. Per-direction values are in
+`beta_tolerance_by_direction.csv`.
+
+A `TOL_FLOOR` of 1.15 guards one degenerate case: if the isolated-spot ratio has almost no
+spread the measured tolerance collapses toward 1.0 and the test becomes exact, which is
+brittle. The floor never binds on real data — the lowest measured value is 1.98.
 
 ## How this differs from the original pairwise unmixing
 
