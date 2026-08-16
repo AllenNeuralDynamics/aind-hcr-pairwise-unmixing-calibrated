@@ -97,7 +97,24 @@ def main(argv=None):
     print(f"rounds  : {', '.join(rounds)}")
     for r in rounds:
         print(f"  {r}: " + ", ".join(f"{c}={gene_maps[r].get(c)}" for c in CHANS))
-    print(f"fg/bg   : {'skipped' if args.no_fgbg else 'joined from image_spot_detection'}")
+    # Report what will ACTUALLY happen, not what was asked for: the join is silently
+    # skipped when the processed asset has no image_spot_detection folder, and a log
+    # line claiming otherwise hides a missing-input problem until someone looks for
+    # fg/bg columns that are not there.
+    if args.no_fgbg:
+        fgbg_status = "skipped (--no-fgbg)"
+    else:
+        found = [r for r in rounds
+                 if pipeline.round_inputs_from_asset(asset, args.mouse_id, r,
+                                                     args.processed_root or str(data_dir))[1]]
+        if not found:
+            fgbg_status = ("NOT AVAILABLE - no image_spot_detection/ under the processed "
+                           "asset; output will have no fg/bg columns")
+        elif len(found) < len(rounds):
+            fgbg_status = f"available for {len(found)}/{len(rounds)} rounds: {' '.join(found)}"
+        else:
+            fgbg_status = "joined from image_spot_detection"
+    print(f"fg/bg   : {fgbg_status}")
 
     res = pipeline.run_mouse(
         asset, args.mouse_id, rounds, gene_maps,

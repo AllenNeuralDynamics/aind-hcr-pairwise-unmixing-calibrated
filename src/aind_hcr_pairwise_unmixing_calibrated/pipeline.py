@@ -121,7 +121,7 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
             outp = Path(output_dir)
             outp.mkdir(parents=True, exist_ok=True)
             res["spots"].to_parquet(
-                outp / f"{mouse_id}_{round_key}_unmixed_v5.parquet", index=False)
+                outp / f"{mouse_id}_{round_key}_unmixed_calibrated.parquet", index=False)
         del spots, res
     cxg_all = pd.concat(cxgs, ignore_index=True)
     table = cxg_all.pivot_table(index="cell_id", columns="round_chan_gene",
@@ -132,8 +132,8 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
                   summary=pd.DataFrame(summary))
     if output_dir:
         outp = Path(output_dir)
-        table.to_csv(outp / f"{mouse_id}_cellxgene_v5.csv")
-        result["separability"].to_csv(outp / f"{mouse_id}_separability_v5.csv", index=False)
-        result["decisions"].to_csv(outp / f"{mouse_id}_decisions_v5.csv", index=False)
-        result["summary"].to_csv(outp / f"{mouse_id}_spot_change_v5.csv", index=False)
+        table.to_csv(outp / f"{mouse_id}_cellxgene_calibrated.csv")
+        result["separability"].to_csv(outp / f"{mouse_id}_separability_calibrated.csv", index=False)
+        result["decisions"].to_csv(outp / f"{mouse_id}_decisions_calibrated.csv", index=False)
+        result["summary"].to_csv(outp / f"{mouse_id}_spot_change_calibrated.csv", index=False)
     return result
