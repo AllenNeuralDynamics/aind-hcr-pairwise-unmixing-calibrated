@@ -25,16 +25,17 @@ own capsule against the same data assets.
 The upstream pairwise stage removes crosstalk by finding same-cell overlapping spots in
 adjacent channel pairs and deleting whichever fits its own dye line worse. The calibrated
 version keeps that core idea — a ghost sits on top of its source and has a predictable brightness — and
-changes six things, each because a measurement said so.
+changes six things, each because a measurement said so. The numbered rationale for each
+is in the section that follows.
 
 | change | why |
 |---|---|
-| takes the **full** spot table; geometric QC annotated, not applied | measured over 66M spots in 4 rounds: one of the three filters cannot remove anything by construction, and the other two discard spots no dirtier than the ones they keep, and brighter |
+| geometric QC gates **audited**; `dist_r` dropped | Both versions annotate rather than drop (see the detailed table below) — what changed is *which* gates are trusted. The capsule sets three: `dist < 1.25` (spot centre vs. its fitted centroid, in voxels), `r > 0.25` (correlation of the spot to the fitted PSF), and `dist_r > 1.0`. Audited over all 66M spots in mouse 800995 and 788406, rounds R2–R5: **`dist_r > 1.0` removes exactly 0%** in every round, because `dist_r` is the ratio of a spot's nearest to its second-nearest dye line and is ≥ 1 by definition. The other two do remove spots (1.6–9.9% and 0.5–7.1%), but the spots they remove are **brighter in all 20 channel-rounds** (e.g. R2 Tac: median 133 discarded vs 57 kept) and, on a crosstalk proxy, no dirtier in 13 of 20 — so they are not obviously removing junk |
 | dye lines from **spatially isolated** spots | the old "brightest in its own channel" purity rule is circular — in one mouse 93% of Sst spots peak in the Cck channel *because of* the bleed being measured. The isolated-spot estimate lands within 1° of what the single-dye control independently predicts |
 | bleed magnitude and tolerance **measured per direction** | the inherited 1.5× tolerance had no derivation. The bleed ratio is not constant: flat for bright spots, rising for dim ones (a background floor). The calibrated version fits on the bright quartile of isolated spots and measures the tolerance as an upper percentile of the same labelled set |
 | allowlist is **control-derived and bidirectional** | apparent bleed between distant channels is co-expression, not leakage — co-expressed genes are deliberately placed in non-neighbouring channels precisely because bleed there is negligible. But a pair that bleeds one way bleeds both, and the control's asymmetry does not hold in tissue (Vip/Sst: 7.6× predicted, 1.5–3.7× measured) |
-| deletion needs spatial **and** magnitude **and** spectral evidence; undecidable spots flagged, not deleted | co-location runs 200–600× above a displaced null, so it is strong evidence; but a spot whose predicted bleed sits under the victim channel's noise floor cannot be judged either way |
-| output **unfiltered**, carrying raw fg and local bg | the delivered table keeps only FG−BG, which cannot tell 300-over-100 from 300-over-900. Thresholding belongs at cell × gene construction |
+| deletion needs spatial **and** magnitude **and** spectral evidence; undecidable spots flagged, not deleted | *Is co-location meaningful, or would spots land on top of each other anyway at this density?* Test: shift every source spot 24 µm sideways and re-run the search. On directions the control certifies as bleeding, real co-location runs **212–870× above** that shifted control, so a partner is genuine evidence rather than crowding. But the brightness test has a limit: a source spot dim enough that its *predicted* bleed (β × source) falls at or below the victim channel's own noise floor — taken as the 10th percentile of that channel's intensities — gives the test no dynamic range. Such spots are marked `v3_ambiguous` and kept, rather than silently deleted or silently retained |
+| output **unfiltered**, carrying raw fg and local bg | the delivered table keeps only FG−BG, which cannot tell 300-over-100 from 300-over-900. Retaining `fg`, `bg` and their difference in the result allows intensity thresholding prior to cell × gene construction if desired |
 
 ## How this differs from the original pairwise unmixing
 
@@ -91,13 +92,54 @@ has no such feedback loop and lands within 1° of the control's independent pred
 radius either misses z-displaced ghosts or admits laterally distant chance co-locations.
 
 **QC gates audited, one dropped.** Both versions annotate rather than drop, so this is a
-smaller difference than it first appears. What the audit changed is the gate *set*:
-measured across four rounds and 66M spots, `dist_r > 1.0` cannot remove anything, because
-`dist_r` is the ratio of a spot's smallest to its second-smallest dye-line distance and is
-therefore ≥ 1 by construction. The other two gates do remove spots, but those spots are no
-dirtier on a crosstalk proxy than the ones kept, and are brighter — so the calibrated
-version leaves the thresholds to the cell × gene step rather than treating them as
-settled.
+smaller difference than it first appears — what the audit changed is which gates are
+trusted. The three gates the capsule sets are:
+
+| gate | what it measures | capsule value |
+|---|---|---|
+| `dist` | distance from the detected spot centre to its fitted centroid, in voxels | `< 1.25` |
+| `r` | correlation between the spot and the fitted point-spread function | `> 0.25` |
+| `dist_r` | ratio of a spot's distance to its *nearest* dye line over its *second-nearest* | `> 1.0` |
+
+The audit covered every spot in both mice across rounds R2–R5 — 66,059,174 spots, 20
+round × channel combinations — which is what makes the per-channel breakdown below
+trustworthy rather than anecdotal.
+
+`dist_r` is **a no-op at the capsule's setting**. It is a ratio of a smaller distance to a
+larger one, so it is ≥ 1 for every spot by construction, and `> 1.0` therefore removes
+0.00% in all four rounds. (The engine's own default is 4, which would remove 48–85%
+depending on the round — a very different gate. The capsule overrides it to 1.0.)
+
+`dist` and `r` do remove spots — 1.6–9.9% and 0.5–7.1% depending on channel — but the
+spots they remove do not look like junk. In **all 20** round × channel combinations the
+discarded spots are *brighter* in their own channel than the kept ones (R2 Tac: median 133
+vs 57; R3 Calb1: 160 vs 135). On a crosstalk proxy they are no dirtier than the kept spots
+in 13 of 20. Whatever `dist` and `r` are selecting against, it is not contamination and it
+is not dimness. That is why the calibrated version passes the flags through and leaves the
+choice to the cell × gene step rather than treating the thresholds as settled.
+
+**Co-location tested against a displaced null.** "The victim spot has a source spot on top
+of it" is only evidence if spots don't land on top of each other by chance at these
+densities — and these are dense samples (up to 13M spots in one channel). The test:
+translate every source spot 24 µm along one axis and re-run the identical search. Any hits
+now are pure chance. Measured on the four Sst/Cck/Vip directions in both mice, real
+co-location runs **212–870× above** that shifted control (Sst→Vip in 800995: 8.9% of Vip
+spots have a sub-voxel Sst partner, against 0.04% after displacement), so a partner is
+genuine evidence.
+
+The same test is a useful negative control. Cck→Vip — a distant pair, where the panel
+places co-expressed genes precisely because bleed is negligible — comes in at only 28× and
+34×, an order of magnitude below the real bleed directions. That is one of the two
+discriminators behind excluding distant pairs from the allowlist.
+
+**An explicit "cannot tell" category.** The brightness test asks whether a victim spot is
+dim enough to be pure bleed from its partner. When the partner is itself dim, the predicted
+bleed β × source can fall below the victim channel's own background — measured as the 10th
+percentile of that channel's intensities — and the test has no dynamic range left. Rather
+than deleting on a test that cannot discriminate, or silently keeping and pretending the
+question was asked, those spots are flagged `v3_ambiguous` and passed through. Note the
+criterion is on the *source* side: a plain victim-brightness cut would be wrong, because
+real Cck spots are *dimmer* than true bleed into that channel (median 113 vs 180).
 
 **Filtered output → annotated output.** A deleted row cannot be audited or reversed.
 Downstream steps need to make their own thresholding decisions, which requires the raw
