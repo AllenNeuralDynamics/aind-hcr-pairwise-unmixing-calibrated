@@ -306,7 +306,8 @@ def test_class_labels_need_a_positive_marker():
     no_exc = t.drop(columns=["R1-561-Slc17a7"])
     cls2, info2 = A.assign_class(no_exc)
     assert "excitatory" not in set(cls2.unique())          # never asserted
-    assert info2["markers_available"]["excitatory"] is None
+    # "none" rather than None: uns is written to HDF5, which cannot store None
+    assert info2["markers_available"]["excitatory"] == "none"
     assert (cls2 == "inhibitory").sum() == (cls == "inhibitory").sum()
 
 
@@ -375,3 +376,21 @@ def test_anndata_keeps_raw_counts_in_X():
     # every cell of a known class gets a cluster
     known = adata.obs["class"].isin(["inhibitory", "excitatory"])
     assert (adata.obs.loc[known, "cluster_id"] >= 0).all()
+
+
+def test_anndata_round_trips_to_h5ad(tmp_path):
+    """uns must be HDF5-writable: int keys and None values raise inside the writer,
+    AFTER the expensive unmixing has already run."""
+    pytest.importorskip("anndata")
+    import anndata as ad
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    adata = A.build_anndata(_fake_table(), n_inh=4, n_exc=3)
+    path = tmp_path / "annotated.h5ad"
+    adata.write_h5ad(path)                       # must not raise
+
+    back = ad.read_h5ad(path)
+    assert back.n_obs == adata.n_obs
+    assert set(back.obs["cluster"].unique()) == set(adata.obs["cluster"].unique())
+    assert "normalized" in back.layers
+    assert np.allclose(back.X, adata.X)

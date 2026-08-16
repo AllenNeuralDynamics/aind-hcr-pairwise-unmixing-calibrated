@@ -121,7 +121,7 @@ def assign_class(table, min_counts=MIN_CLASS_COUNTS, markers=CLASS_MARKERS):
     out[only_inh] = "inhibitory"
     out[only_exc] = "excitatory"
     # both-positive stays "unassigned"; so does neither-positive
-    info = dict(markers_available={c: cols[c] for c in cols},
+    info = dict(markers_available={c: (cols[c] or "none") for c in cols},
                 min_counts=min_counts,
                 n_double_positive=int((pos["inhibitory"] & pos["excitatory"]).sum()),
                 n_neither=int((~pos["inhibitory"] & ~pos["excitatory"]).sum()))
@@ -230,13 +230,18 @@ def cluster_by_class(normalized, classes, n_inh=N_CLUSTERS_INH, n_exc=N_CLUSTERS
         cluster_id.loc[sel] = [c + offset for c in lab]
         subclass.loc[sel] = [sc[c][0] for c in lab]
 
+        # uns is written to HDF5, whose group keys must be strings -- an int key
+        # raises deep inside the writer AFTER the unmixing has already run. Keys are
+        # stringified here, and the values kept HDF5-writable (no None).
         info[cls] = dict(n_cells=int(len(sel)), n_clusters=int(k),
                          id_offset=int(offset),
-                         names={int(c): names[c] for c in means.index},
-                         subclass={int(c): sc[c][0] for c in means.index},
-                         subclass_enrichment={int(c): (None if not np.isfinite(sc[c][1])
-                                                       else round(sc[c][1], 3))
-                                              for c in means.index})
+                         names={str(int(c)): names[c] for c in means.index},
+                         subclass={str(int(c)): (sc[c][0] or "none")
+                                   for c in means.index},
+                         subclass_enrichment={
+                             str(int(c)): (float("nan") if not np.isfinite(sc[c][1])
+                                           else round(float(sc[c][1]), 3))
+                             for c in means.index})
         offset += k
 
     return labels, cluster_id, subclass, info
