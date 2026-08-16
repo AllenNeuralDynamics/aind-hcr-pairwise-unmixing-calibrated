@@ -304,7 +304,7 @@ res["cellxgene"]      # cells x round-channel-gene
 res["decisions"]      # per direction: which rule fired, how many spots moved
 ```
 
-Or from a capsule, using the entry point in `capsule_patch/`:
+Or from a capsule (`code/run_capsule.py`):
 
 ```bash
 python run_capsule.py --mouse-id 790322
@@ -435,16 +435,50 @@ no-op. It is there for the class marker, not for crosstalk removal.
 
 Pass `--no-anndata` to skip this step.
 
+## Running as a Code Ocean capsule
+
+This repository **is** a capsule: clone it into a new capsule and it has the structure
+Code Ocean expects.
+
+```
+environment/Dockerfile    the image: numpy, scipy, pandas, pyarrow, scikit-learn, anndata
+code/run                  master script, executed on "Reproducible Run"
+code/run_capsule.py       entry point (argument parsing, round discovery, reporting)
+src/...                   the package, added to sys.path at run time by run_capsule.py
+```
+
+The package is deliberately **not** pip-installed in the image. Its source is mounted at
+`/root/capsule/src` and `run_capsule.py` puts that on `sys.path`, so editing the
+algorithm takes effect on the next run with **no environment rebuild**. Nothing from the
+upstream engine is installed — no `aind-spot-spectral-unmixing`, none of its git
+dependencies.
+
+**Attach two kinds of data asset:**
+
+| asset | why |
+|---|---|
+| `HCR_<mouse>_pairwise-unmixing_<date>` | the spot tables: `<mouse>_<R>/mixed_spots_<R>.pkl` and `ds_config.json` |
+| `HCR_<mouse>_<date>_processed_<date>` | `acquisition.json` (laser power, **required**), `image_spot_detection/` (fg/bg), and the schema files carried into the derived asset |
+
+Run parameters, e.g. `--mouse-id 800995 --experimenter "Your Name"`. Rounds default to
+every round found, which is what you want.
+
 ## Layout
 
 ```
+environment/Dockerfile        Code Ocean image definition
+code/
+    run                       master script
+    run_capsule.py            entry point
 src/aind_hcr_pairwise_unmixing_calibrated/
     core.py       the algorithm - endmembers, beta, co-location, per-spot decisions
     control.py    single-dye control matrix (shared across mice) and laser power
     fgbg.py       raw foreground / local background join, and threshold helper
+    annotate.py   AnnData with class / subclass / named cluster labels
+    metadata.py   aind-data-schema files for the derived asset
     pipeline.py   per-round and per-mouse drivers
-capsule_patch/
-    run_capsule.py    Code Ocean entry point
 tests/
     test_core.py  synthetic ground truth - ghosts with known identity
+docs/
+    unmixing_summary.pdf      plain-language walkthrough, 14 pages
 ```

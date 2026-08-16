@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -ex
+
+# Master script: this runs on "Reproducible Run".
+#
+# --mouse-id is required. Rounds default to every round found in the attached
+# pairwise-unmixing asset, which is what you want: R1 carries Slc17a7 and R4 carries
+# Gad2, and both are needed for class labels.
+python -u run_capsule.py "$@"

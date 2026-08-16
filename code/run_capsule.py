@@ -27,6 +27,15 @@ from pathlib import Path
 
 import pandas as pd
 
+# The package source lives in the capsule at ../src (i.e. /root/capsule/src), which is
+# mounted at run time. Adding it to sys.path rather than pip-installing at image build
+# means a code edit takes effect on the next run without an environment rebuild. When
+# the package IS installed (local dev, `pip install -e .`), the installed copy is found
+# first and this is a no-op.
+_SRC = Path(__file__).resolve().parent.parent / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
 from aind_hcr_pairwise_unmixing_calibrated import pipeline
 from aind_hcr_pairwise_unmixing_calibrated.control import CHANS
 
