@@ -213,6 +213,14 @@ def _write_asset_metadata(asset_dir, mouse_id, rounds, outp, processed_root,
             source_dirs.append(d)
 
     copied = metadata.copy_upstream_metadata(source_dirs, outp)
+    # data_description is WRITTEN, not copied: a derived asset names itself and points
+    # at its parent (see metadata.derived_data_description).
+    dd = None
+    for d in source_dirs:
+        dd = metadata.derived_data_description(
+            d, outp, investigators=[experimenter] if experimenter else None)
+        if dd:
+            break
     upstream = metadata.find_upstream_processing(source_dirs)
     summ = result["summary"]
     dp = metadata.unmixing_data_process(
@@ -230,7 +238,8 @@ def _write_asset_metadata(asset_dir, mouse_id, rounds, outp, processed_root,
     )
     path = metadata.write_processing(outp, dp, upstream_processing=upstream,
                                      processor_full_name=experimenter or "")
-    return {"processing": path, "copied": copied, "upstream_processing": upstream}
+    return {"processing": path, "copied": copied, "upstream_processing": upstream,
+            "data_description": dd}
 
 
 def _jsonable(d):

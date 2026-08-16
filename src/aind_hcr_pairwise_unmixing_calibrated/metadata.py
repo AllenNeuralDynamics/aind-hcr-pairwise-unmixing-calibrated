@@ -43,10 +43,22 @@ PROCESS_NAME = "Image spot spectral unmixing"
 
 CODE_URL = "https://github.com/AllenNeuralDynamics/aind-hcr-pairwise-unmixing-calibrated"
 
-#: Core schema files worth carrying into a derived asset. Missing ones are skipped.
-CORE_METADATA_FILES = ("subject.json", "data_description.json", "procedures.json",
-                       "instrument.json", "rig.json", "session.json",
-                       "acquisition.json", "quality_control.json", "metadata.nd.json")
+#: Core schema files carried into the derived asset unchanged. These describe the
+#: SUBJECT and the ACQUISITION, which our processing does not alter, so copying them
+#: forward is correct.
+#:
+#: data_description.json is deliberately NOT in this list -- see
+#: derived_data_description(). It describes the ASSET, and a derived asset must name
+#: itself and point at its parent; copying the parent's would claim our output is the
+#: parent. metadata.nd.json is also excluded: it is an aggregate of the others and
+#: would go stale the moment data_description differs.
+CORE_METADATA_FILES = ("subject.json", "procedures.json", "instrument.json",
+                       "rig.json", "session.json", "acquisition.json",
+                       "quality_control.json")
+
+#: Name of this processing step, used in the derived asset name and in
+#: data_description.process_name.
+PROCESS_SLUG = "unmixed-calibrated"
 
 
 def _now():
@@ -74,6 +86,55 @@ def copy_upstream_metadata(source_dirs, output_dir, files=CORE_METADATA_FILES):
                 copied[fname] = str(src)
                 break
     return copied
+
+
+def derived_data_description(parent_dir, output_dir, process_slug=PROCESS_SLUG,
+                             creation_time=None, investigators=None):
+    """Write a data_description.json for the DERIVED asset this capsule produces.
+
+    A derived asset does not inherit its parent's data_description: that file names the
+    asset, and copying it forward would assert that our output IS the parent. The AIND
+    convention, read off the processed assets themselves, is
+
+        name            = <parent name>_<process_slug>_<creation timestamp>
+        data_level      = "derived"
+        input_data_name = <parent name>
+        process_name    = <process_slug>
+
+    with subject_id, institution, investigators, funding, licence, modality and platform
+    carried over from the parent because they are unchanged by processing.
+
+    Returns the written path, or None when the parent has no data_description.json to
+    inherit those fields from -- in that case there is nothing trustworthy to write and
+    inventing values would be worse than omitting the file.
+    """
+    parent_dd = Path(parent_dir) / "data_description.json"
+    if not parent_dd.exists():
+        return None
+    with open(parent_dd) as fh:
+        parent = json.load(fh)
+
+    now = creation_time or datetime.now(timezone.utc)
+    stamp = now.strftime("%Y-%m-%d_%H-%M-%S")
+    parent_name = parent.get("name") or Path(parent_dir).name
+
+    doc = dict(parent)                      # inherit unchanged descriptive fields
+    doc.update({
+        "name": f"{parent_name}_{process_slug}_{stamp}",
+        "data_level": "derived",
+        "input_data_name": parent_name,
+        "process_name": process_slug,
+        "creation_time": now.isoformat().replace("+00:00", "Z"),
+    })
+    if investigators:
+        doc["investigators"] = [{"name": n} for n in investigators]
+
+    outp = Path(output_dir)
+    outp.mkdir(parents=True, exist_ok=True)
+    path = outp / "data_description.json"
+    with open(path, "w") as fh:
+        json.dump(doc, fh, indent=3)
+    return str(path)
 
 
 def unmixing_data_process(input_locations, output_location, parameters,

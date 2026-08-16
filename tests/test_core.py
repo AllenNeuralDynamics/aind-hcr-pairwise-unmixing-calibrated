@@ -213,3 +213,59 @@ def test_copy_upstream_metadata_first_hit_wins(tmp_path):
     copied = M.copy_upstream_metadata([a, b], out)
     assert json.loads((out / "subject.json").read_text())["from"] == "a"
     assert set(copied) == {"subject.json", "procedures.json"}
+
+
+def test_derived_data_description_names_itself_not_parent(tmp_path):
+    """A derived asset must NOT inherit the parent's name/data_level."""
+    from aind_hcr_pairwise_unmixing_calibrated import metadata as M
+
+    parent = tmp_path / "HCR_800995_2026-04-08_13-00-00_processed_2026-04-13_21-37-30"
+    parent.mkdir()
+    (parent / "data_description.json").write_text(json.dumps({
+        "schema_version": "1.0.4",
+        "name": parent.name,
+        "data_level": "derived",
+        "input_data_name": "HCR_800995_2026-04-08_13-00-00",
+        "process_name": "processed",
+        "subject_id": "800995",
+        "institution": {"name": "AIND"},
+        "modality": [{"name": "Selective plane illumination microscopy"}]}))
+
+    out = tmp_path / "results"
+    path = M.derived_data_description(parent, out, creation_time=None)
+    doc = json.loads(Path(path).read_text())
+
+    assert doc["name"] != parent.name                    # not the parent's name
+    assert doc["name"].startswith(parent.name)           # but derived from it
+    assert M.PROCESS_SLUG in doc["name"]
+    assert doc["data_level"] == "derived"
+    assert doc["input_data_name"] == parent.name         # points AT the parent
+    assert doc["process_name"] == M.PROCESS_SLUG
+    # descriptive fields carried over unchanged
+    assert doc["subject_id"] == "800995"
+    assert doc["institution"] == {"name": "AIND"}
+
+
+def test_data_description_not_blindly_copied(tmp_path):
+    """copy_upstream_metadata must never copy data_description.json."""
+    from aind_hcr_pairwise_unmixing_calibrated import metadata as M
+
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    for f in ("subject.json", "data_description.json", "acquisition.json"):
+        (src / f).write_text("{}")
+
+    copied = M.copy_upstream_metadata([src], out)
+    assert "data_description.json" not in copied
+    assert not (out / "data_description.json").exists()
+    assert {"subject.json", "acquisition.json"} <= set(copied)
+
+
+def test_no_data_description_written_without_parent(tmp_path):
+    """Without a parent to inherit from, write nothing rather than invent fields."""
+    from aind_hcr_pairwise_unmixing_calibrated import metadata as M
+
+    empty, out = tmp_path / "empty", tmp_path / "out"
+    empty.mkdir()
+    assert M.derived_data_description(empty, out) is None
+    assert not (out / "data_description.json").exists()

@@ -349,11 +349,21 @@ standalone.
 
 The results directory is written as a proper derived asset, not a bare folder of CSVs:
 
-- **Upstream schema files are carried forward.** `subject.json`,
-  `data_description.json`, `acquisition.json`, `procedures.json`, `instrument.json`,
-  `quality_control.json` and friends are copied from the processed asset into the
-  results, so the derived asset is not orphaned from the metadata describing where it
-  came from. Whatever is absent upstream is skipped without complaint.
+- **Upstream schema files are carried forward unchanged.** `subject.json`,
+  `acquisition.json`, `procedures.json`, `instrument.json`, `quality_control.json`,
+  `rig.json`, `session.json` — these describe the subject and the acquisition, which
+  unmixing does not alter, so copying them is correct. Whatever is absent upstream is
+  skipped without complaint. Both the raw and the processed assets carry the full set,
+  so pointing at either works.
+- **`data_description.json` is written, not copied.** That file describes the *asset*,
+  so copying the parent's would assert that our output is the parent. Following the
+  convention the processed assets themselves use, the derived one gets
+  `name = <parent>_unmixed-calibrated_<timestamp>`, `data_level = "derived"`, and
+  `input_data_name = <parent>`, while inheriting subject, institution, modality,
+  funding and licence unchanged. If no parent `data_description.json` is found, none is
+  written — inventing those fields would be worse than omitting the file.
+  `metadata.nd.json` is excluded for the same reason: it aggregates the others and would
+  go stale immediately.
 - **`processing.json` records this step.** One `DataProcess` named
   `Image spot spectral unmixing` — a term in the aind-data-schema controlled vocabulary
   — carrying the repository URL and version, input and output locations, the run

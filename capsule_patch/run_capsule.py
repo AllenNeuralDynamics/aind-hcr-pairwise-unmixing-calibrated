@@ -144,6 +144,13 @@ def main(argv=None):
         print(f"\nmetadata: {Path(meta['processing']).name}"
               f" ({'extends ' + meta['upstream_processing'] if meta['upstream_processing'] else 'new'})")
         print(f"  copied forward: {', '.join(sorted(meta['copied'])) or 'nothing found'}")
+        if meta.get("data_description"):
+            import json as _j
+            nm = _j.load(open(meta["data_description"]))["name"]
+            print(f"  derived asset : {nm}")
+        else:
+            print("  derived asset : no parent data_description.json found - "
+                  "data_description.json NOT written")
     print(f"written to {args.output_dir}")
     return 0
 
