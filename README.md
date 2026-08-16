@@ -345,6 +345,36 @@ what remains open. Start here if you want the reasoning rather than the API.
 [`docs/beta_explainer.png`](docs/beta_explainer.png) — the β figure from the section above,
 standalone.
 
+## Metadata (aind-data-schema)
+
+The results directory is written as a proper derived asset, not a bare folder of CSVs:
+
+- **Upstream schema files are carried forward.** `subject.json`,
+  `data_description.json`, `acquisition.json`, `procedures.json`, `instrument.json`,
+  `quality_control.json` and friends are copied from the processed asset into the
+  results, so the derived asset is not orphaned from the metadata describing where it
+  came from. Whatever is absent upstream is skipped without complaint.
+- **`processing.json` records this step.** One `DataProcess` named
+  `Image spot spectral unmixing` — a term in the aind-data-schema controlled vocabulary
+  — carrying the repository URL and version, input and output locations, the run
+  parameters, and a note with the spot counts in and out. Any upstream
+  `processing.json` found is extended rather than replaced, so the processing history
+  accumulates.
+
+Pass `--experimenter "Your Name"` to fill `processor_full_name`, or `--no-metadata` to
+skip the whole step.
+
+**Schema version.** These files are written as **1.1.4**, matching the `processing.json`
+already present in the HCR processed assets. The installed `aind-data-schema` library is
+2.x and its `Processing` model emits schema 2.3.0 with a different structure — a flat
+`data_processes` list, `process_type`/`stage`/`code` fields, required `experimenters`.
+Mixing both shapes in one asset would leave a file neither reader handles cleanly, so the
+1.1.4 shape is written by hand and verified field-for-field against the real assets in
+`tests/test_core.py`. If an upstream `processing.json` turns out to be 2.x-shaped it is
+referenced in the note rather than downgraded. Migrating to 2.x is a deliberate future
+step for the whole asset at once; `metadata.upgrade_note()` records what it involves,
+and the 2.x construction has been verified to validate under aind-data-schema 2.8.1.
+
 ## Layout
 
 ```

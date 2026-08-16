@@ -81,6 +81,10 @@ def main(argv=None):
     ap.add_argument("--output-dir", default=str(OUTPUT_DIR))
     ap.add_argument("--no-fgbg", action="store_true",
                     help="skip the fg/bg join (faster; output lacks fg/bg columns)")
+    ap.add_argument("--experimenter", default=None,
+                    help="name recorded as processor_full_name in processing.json")
+    ap.add_argument("--no-metadata", action="store_true",
+                    help="skip writing processing.json and copying upstream schema files")
     ap.add_argument("--processed-folder", default=None,
                     help="explicit processed-asset directory name to read acquisition.json "
                          "and image_spot_detection from. Overrides ds_config.json's "
@@ -127,12 +131,19 @@ def main(argv=None):
         processed_root=args.processed_root or str(data_dir),
         processed_folder=args.processed_folder,
         output_dir=args.output_dir,
-        use_fgbg=not args.no_fgbg)
+        use_fgbg=not args.no_fgbg,
+        write_metadata=not args.no_metadata,
+        experimenter=args.experimenter)
 
     print("\nper-channel spot change:")
     print(res["summary"].to_string(index=False))
     print(f"\ncell x gene: {res['cellxgene'].shape[0]:,} cells x "
           f"{res['cellxgene'].shape[1]} gene-rounds")
+    meta = res.get("metadata")
+    if meta:
+        print(f"\nmetadata: {Path(meta['processing']).name}"
+              f" ({'extends ' + meta['upstream_processing'] if meta['upstream_processing'] else 'new'})")
+        print(f"  copied forward: {', '.join(sorted(meta['copied'])) or 'nothing found'}")
     print(f"written to {args.output_dir}")
     return 0
 

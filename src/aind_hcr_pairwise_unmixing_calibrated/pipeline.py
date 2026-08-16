@@ -12,6 +12,7 @@ import pandas as pd
 
 from . import core
 from .control import CHANS, control_matrix, load_powers, resolve_dataset_folder
+from . import metadata
 from .fgbg import attach_fg_bg, diagonal_stats_path
 
 
@@ -128,7 +129,8 @@ def round_inputs_from_asset(asset_dir, mouse_id, round_key, processed_root=None,
 
 def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
               powers_by_round=None, output_dir=None, use_fgbg=True,
-              processed_folder=None, **unmix_kw):
+              processed_folder=None, write_metadata=True, experimenter=None,
+              **unmix_kw):
     """Unmix every round of one mouse and concatenate the cell x gene tables.
 
     Writes per-round spot tables and a combined cell x gene table when output_dir is
@@ -187,4 +189,57 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
         result["separability"].to_csv(outp / f"{mouse_id}_separability_calibrated.csv", index=False)
         result["decisions"].to_csv(outp / f"{mouse_id}_decisions_calibrated.csv", index=False)
         result["summary"].to_csv(outp / f"{mouse_id}_spot_change_calibrated.csv", index=False)
+        if write_metadata:
+            result["metadata"] = _write_asset_metadata(
+                asset_dir, mouse_id, rounds, outp, processed_root, processed_folder,
+                result, dict(use_fgbg=use_fgbg, **unmix_kw),
+                experimenter=experimenter)
     return result
+
+
+def _write_asset_metadata(asset_dir, mouse_id, rounds, outp, processed_root,
+                          processed_folder, result, params, experimenter=None):
+    """Carry upstream schema files forward and record this step in processing.json."""
+    proc_dirs = []
+    for round_key in rounds:
+        acq, _ = round_inputs_from_asset(asset_dir, mouse_id, round_key,
+                                         processed_root, processed_folder)
+        if acq:
+            proc_dirs.append(str(Path(acq).parent))
+    seen, source_dirs = set(), []
+    for d in proc_dirs + [str(asset_dir)]:
+        if d not in seen:
+            seen.add(d)
+            source_dirs.append(d)
+
+    copied = metadata.copy_upstream_metadata(source_dirs, outp)
+    upstream = metadata.find_upstream_processing(source_dirs)
+    summ = result["summary"]
+    dp = metadata.unmixing_data_process(
+        input_locations=[str(Path(asset_dir) / f"{mouse_id}_{r}") for r in rounds],
+        output_location=str(outp),
+        parameters={"rounds": list(rounds), "mouse_id": mouse_id,
+                    "processed_folder": processed_folder, **_jsonable(params)},
+        outputs={"cellxgene": f"{mouse_id}_cellxgene_calibrated.csv",
+                 "spots": [f"{mouse_id}_{r}_unmixed_calibrated.parquet" for r in rounds],
+                 "decisions": f"{mouse_id}_decisions_calibrated.csv",
+                 "spot_change": f"{mouse_id}_spot_change_calibrated.csv"},
+        notes=(f"{int(summ.n_detected.sum()):,} spots in, "
+               f"{int(summ.n_final.sum()):,} out across {len(rounds)} round(s). "
+               "Geometric QC flags are annotated, not applied."),
+    )
+    path = metadata.write_processing(outp, dp, upstream_processing=upstream,
+                                     processor_full_name=experimenter or "")
+    return {"processing": path, "copied": copied, "upstream_processing": upstream}
+
+
+def _jsonable(d):
+    """Drop values json.dump cannot serialise (arrays, callables)."""
+    out = {}
+    for k, v in (d or {}).items():
+        if v is None or isinstance(v, (str, int, float, bool)):
+            out[k] = v
+        elif isinstance(v, (list, tuple)) and all(
+                isinstance(x, (str, int, float, bool)) for x in v):
+            out[k] = list(v)
+    return out

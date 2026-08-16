@@ -1,4 +1,7 @@
 """Synthetic ground-truth tests. No data assets required -- these run anywhere."""
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -132,3 +135,81 @@ def test_fg_bg_columns_appear_when_supplied():
                             same_cell=False, fg_bg=(fg, bg))
     assert {"fg", "bg", "fg_over_bg"} <= set(out.columns)
     assert np.allclose(out.fg_over_bg.to_numpy(), 3.0)
+
+
+# ---------------------------------------------------------------- metadata
+
+
+def test_processing_json_matches_v114_shape(tmp_path):
+    """The emitted processing.json must match the 1.1.4 files already in the assets."""
+    from aind_hcr_pairwise_unmixing_calibrated import metadata as M
+
+    dp = M.unmixing_data_process(
+        input_locations=["s3://bucket/asset/800995_R5"],
+        output_location="s3://bucket/derived",
+        parameters={"rounds": ["R5"]},
+        outputs={"cellxgene": "x.csv"},
+    )
+    # field set and order must match what the HCR assets carry
+    assert tuple(dp) == M._V114_DATA_PROCESS_FIELDS
+    assert dp["name"] == "Image spot spectral unmixing"
+
+    path = M.write_processing(tmp_path, dp, processor_full_name="Tester")
+    doc = json.loads(Path(path).read_text())
+    assert doc["schema_version"] == "1.1.4"
+    assert set(doc) == {"describedBy", "schema_version", "processing_pipeline",
+                        "analyses", "notes"}
+    pp = doc["processing_pipeline"]
+    assert set(pp) == {"data_processes", "processor_full_name", "pipeline_version",
+                       "pipeline_url", "note"}
+    assert len(pp["data_processes"]) == 1
+
+
+def test_processing_json_appends_to_upstream(tmp_path):
+    """Upstream 1.1.4 history is preserved, not overwritten."""
+    from aind_hcr_pairwise_unmixing_calibrated import metadata as M
+
+    upstream = tmp_path / "processing.json"
+    upstream.write_text(json.dumps({
+        "describedBy": M.DESCRIBED_BY, "schema_version": "1.1.4",
+        "processing_pipeline": {"data_processes": [{"name": "Image spot detection"}],
+                                "processor_full_name": "Someone"},
+        "analyses": [], "notes": ""}))
+
+    out = tmp_path / "results"
+    dp = M.unmixing_data_process(["in"], str(out), {})
+    path = M.write_processing(out, dp, upstream_processing=str(upstream))
+    steps = json.loads(Path(path).read_text())["processing_pipeline"]["data_processes"]
+    assert [s["name"] for s in steps] == ["Image spot detection",
+                                          "Image spot spectral unmixing"]
+
+
+def test_2x_upstream_is_not_downgraded(tmp_path):
+    """A 2.x upstream must be referenced, never silently rewritten into 1.1.4."""
+    from aind_hcr_pairwise_unmixing_calibrated import metadata as M
+
+    upstream = tmp_path / "processing.json"
+    upstream.write_text(json.dumps({
+        "schema_version": "2.3.0",
+        "data_processes": [{"process_type": "Image spot detection", "stage": "Processing"}]}))
+
+    out = tmp_path / "results"
+    dp = M.unmixing_data_process(["in"], str(out), {})
+    doc = json.loads(Path(M.write_processing(out, dp, upstream_processing=str(upstream))).read_text())
+    steps = doc["processing_pipeline"]["data_processes"]
+    assert len(steps) == 1                       # upstream NOT merged
+    assert "2.3.0" in doc["processing_pipeline"]["note"]
+
+
+def test_copy_upstream_metadata_first_hit_wins(tmp_path):
+    from aind_hcr_pairwise_unmixing_calibrated import metadata as M
+
+    a, b, out = tmp_path / "a", tmp_path / "b", tmp_path / "out"
+    a.mkdir(); b.mkdir()
+    (a / "subject.json").write_text('{"from": "a"}')
+    (b / "subject.json").write_text('{"from": "b"}')
+    (b / "procedures.json").write_text("{}")
+
+    copied = M.copy_upstream_metadata([a, b], out)
+    assert json.loads((out / "subject.json").read_text())["from"] == "a"
+    assert set(copied) == {"subject.json", "procedures.json"}
