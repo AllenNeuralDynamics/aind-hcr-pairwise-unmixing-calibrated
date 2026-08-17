@@ -52,7 +52,27 @@ def find_asset(mouse_id, data_dir=DATA_DIR):
                 if p.is_dir() and any((p / f"{mouse_id}_{r}").exists()
                                       for r in ("R1", "R2", "R3"))]
     if not hits:
-        raise SystemExit(f"no pairwise-unmixing asset for {mouse_id} under {data_dir}")
+        # Name what IS attached and what is needed. The bare message this replaced
+        # ("no pairwise-unmixing asset") does not say that the fix is to attach a data
+        # asset rather than to change code or rebuild the environment.
+        present = sorted(p.name for p in data_dir.iterdir() if p.is_dir())
+        raise SystemExit("\n".join([
+            "",
+            f"No pairwise-unmixing asset for {mouse_id} found under {data_dir}.",
+            "",
+            "This capsule reads spot tables from",
+            f"  HCR_{mouse_id}_pairwise-unmixing_<date>/{mouse_id}_<R>/mixed_spots_<R>.pkl",
+            "and the round-to-gene mapping from ds_config.json in the same folder.",
+            "",
+            f"Attached assets ({len(present)}):",
+            *[f"  {n}" for n in present],
+            "",
+            "Attach the pairwise-unmixing asset for this mouse and re-run. The",
+            "_processed_ assets alone are not sufficient: they carry acquisition.json",
+            "and image_spot_detection, but the newest generations do not include the",
+            "spot tables, and nothing in them maps an imaging date to a round number.",
+            "",
+        ]))
     if len(hits) > 1:
         print(f"WARNING: {len(hits)} candidate assets, using {hits[0].name}")
     return hits[0]

@@ -1,0 +1,22 @@
+{
+	"version": 1,
+	"named_parameters": true,
+	"parameters": [
+		{
+			"id": "mouseIdParam0001",
+			"name": "--mouse-id",
+			"param_name": "mouse-id",
+			"type": "text",
+			"value_type": "string",
+			"required": true
+		},
+		{
+			"id": "experimenterParam01",
+			"name": "--experimenter",
+			"param_name": "experimenter",
+			"type": "text",
+			"value_type": "string",
+			"required": false
+		}
+	]
+}
