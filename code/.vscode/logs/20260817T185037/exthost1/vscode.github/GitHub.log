@@ -1,0 +1,3 @@
+2026-08-17 18:50:42.799 [info] Log level: Info
+2026-08-17 18:50:45.387 [warning] [GitHubBranchProtectionProvider][updateRepositoryBranchProtection] Failed to update repository branch protection: No GitHub authentication session available.
+2026-08-17 18:50:46.514 [warning] [GitHubSourceControlHistoryItemDetailsProvider][_loadAssignableUsers] Failed to load assignable user(s) for AllenNeuralDynamics/aind-hcr-pairwise-unmixing-calibrated: Error: No GitHub authentication session available.

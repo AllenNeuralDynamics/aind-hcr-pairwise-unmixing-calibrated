@@ -7,8 +7,10 @@ data/
 results/
 *.egg-info/
 
-# VS Code / code-server state written inside the capsule. These are IDE logs, caches
-# and session keys, not source: they churn on every session and code/.vscode/
-# serve-web-key-half is a random web-server key that has no business in a public repo.
-code/.vscode/
-.vscode/
+# NOTE on code/.vscode/: those files are TRACKED, deliberately. gitignore does not
+# apply to already-tracked paths, so listing them here would be misleading. They are
+# IDE logs and caches that churn every session, and they SHOULD eventually leave the
+# repo -- but the removal has to happen from inside the capsule, with `git rm -r
+# --cached code/.vscode` while no code-server session is writing them. Deleting them
+# in a commit pushed from elsewhere makes every capsule sync a delete-vs-modify
+# conflict, 46 of them, which is exactly what happened.
