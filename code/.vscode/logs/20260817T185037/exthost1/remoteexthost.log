@@ -19,3 +19,21 @@
 2026-08-17 18:50:55.736 [info] ExtensionService#_doActivateExtension ms-toolsai.jupyter-renderers, startup: false, activationEvent: 'api', root cause: ms-toolsai.jupyter
 2026-08-17 18:50:57.333 [info] ExtensionService#_doActivateExtension vscode.markdown-language-features, startup: false, activationEvent: 'onLanguage:markdown'
 2026-08-17 18:50:58.299 [info] ExtensionService#_doActivateExtension vscode.markdown-math, startup: false, activationEvent: 'api', root cause: vscode.markdown-language-features
+2026-08-17 18:59:28.073 [info] Extension host terminating: parent process 36 does not exist anymore: kill ESRCH (code: ESRCH) (errno: -3)
+2026-08-17 18:59:28.073 [info] Lock '/root/capsule/code/.vscode/User/workspaceStorage/47b87c33/vscode.lock': Marking the lockfile as scheduled to be released in 6000 ms.
+2026-08-17 18:59:28.107 [error] Error: Channel has been closed
+	at s (file:///.code-server/code-server-4.100.3-linux-amd64/lib/vscode/out/vs/workbench/api/node/extensionHostProcess.js:125:2431)
+	at t.appendLine [as logToChannel] (file:///.code-server/code-server-4.100.3-linux-amd64/lib/vscode/out/vs/workbench/api/node/extensionHostProcess.js:125:2570)
+	at #e (/.vscode/extensions/saoudrizwan.claude-dev-3.35.1-universal/dist/extension.js:622:52192)
+	at t.log (/.vscode/extensions/saoudrizwan.claude-dev-3.35.1-universal/dist/extension.js:622:52022)
+	at Object.fWf (/.vscode/extensions/saoudrizwan.claude-dev-3.35.1-universal/dist/extension.js:4741:4238)
+	at processTicksAndRejections (node:internal/process/task_queues:95:5)
+	at runNextTicks (node:internal/process/task_queues:64:3)
+	at listOnTimeout (node:internal/timers:545:9)
+	at process.processTimers (node:internal/timers:519:7)
+	at async Promise.all (index 17)
+	at async TJ.$ (file:///.code-server/code-server-4.100.3-linux-amd64/lib/vscode/out/vs/workbench/api/node/extensionHostProcess.js:123:9888)
+2026-08-17 18:59:28.109 [error] Error: connect ENOENT /root/capsule/code/.vscode/code-server-ipc.sock
+	at PipeConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)
+2026-08-17 18:59:29.501 [error] Error: connect ENOENT /root/capsule/code/.vscode/code-server-ipc.sock
+	at PipeConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)
