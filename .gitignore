@@ -6,3 +6,9 @@ __pycache__/
 data/
 results/
 *.egg-info/
+
+# VS Code / code-server state written inside the capsule. These are IDE logs, caches
+# and session keys, not source: they churn on every session and code/.vscode/
+# serve-web-key-half is a random web-server key that has no business in a public repo.
+code/.vscode/
+.vscode/
