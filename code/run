@@ -1,9 +1,34 @@
 #!/usr/bin/env bash
-set -ex
+set -e
 
 # Master script: this runs on "Reproducible Run".
 #
 # --mouse-id is required. Rounds default to every round found in the attached
 # pairwise-unmixing asset, which is what you want: R1 carries Slc17a7 and R4 carries
 # Gad2, and both are needed for class labels.
+
+# Preflight: name every missing dependency at once, before the run starts. Without
+# this, a stale environment surfaces as a bare "ModuleNotFoundError: No module named
+# 'pandas'" from deep inside an import chain, which does not say that the fix is to
+# rebuild the environment rather than to change any code.
+python - <<'PY'
+import importlib.util, sys   # importlib.util is NOT imported by `import importlib`
+missing = [m for m in ("numpy", "scipy", "pandas", "pyarrow", "sklearn", "h5py", "anndata")
+           if importlib.util.find_spec(m) is None]
+if missing:
+    sys.exit(
+        "\n".join([
+            "",
+            "Missing Python packages: " + ", ".join(missing),
+            "",
+            "The environment does not match environment/Dockerfile. In the capsule:",
+            "  Environment -> (edit anything, e.g. add a space) -> the image rebuilds,",
+            "  or use the 'Rebuild environment' action.",
+            "A `git pull` updates the Dockerfile but does NOT rebuild the image.",
+            "",
+        ]))
+print("preflight OK: " + sys.version.split()[0])
+PY
+
+set -x
 python -u run_capsule.py "$@"
