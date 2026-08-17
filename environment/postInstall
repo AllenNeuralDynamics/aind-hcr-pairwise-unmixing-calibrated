@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -e
+
+# Installs code-server (the VS Code IDE Code Ocean opens for a capsule). The
+# lightning-jupyterlab base image does NOT ship it, so without this the environment
+# build fails with "Cannot Install Code-Server (VSCode)". This mirrors the postInstall
+# in the existing HCR pairwise-unmixing capsule, which is the proven arrangement in
+# this deployment.
+#
+# What this deliberately does NOT do: clone or install
+# aind-spot-spectral-unmixing. The upstream engine's postInstall ends with a git clone
+# of that repo; this package does not depend on it and must not pull it in. That
+# isolation is the point of this repository.
+
+VERSION=4.108.2
+mkdir -p /.code-server
+cd /.code-server
+curl -fL "https://github.com/coder/code-server/releases/download/v$VERSION/code-server-$VERSION-linux-amd64.tar.gz" \
+  | tar -xz
+ln -sf /.code-server/code-server-$VERSION-linux-amd64/bin/code-server /usr/bin/code-server
+cd -
+
+# Editor extensions. Non-fatal on purpose: a hiccup in the extension registry should
+# not fail an environment build whose actual job is to run the pipeline. code-server
+# itself, above, IS fatal -- the capsule cannot open without it.
+mkdir -p /.vscode/extensions
+for ext in ms-toolsai.jupyter ms-python.python; do
+    code-server --extensions-dir=/.vscode/extensions --install-extension "$ext" \
+        || echo "WARNING: could not install extension $ext (continuing)"
+done
