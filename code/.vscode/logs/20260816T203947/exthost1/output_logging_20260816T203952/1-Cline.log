@@ -1,8 +1,0 @@
-ClineProvider instantiated
-DEBUG No stored authentication data found
-Checking for legacy checkpoints...
-LOG BannerService: Fetching banners from https://api.cline.bot/banners/v1/messages
-LOG Cline extension activated
-INFO TelemetryProviderFactory: Created providers - Pue, ast
-INFO TelemetryProviderFactory: Created providers - Pue, ast
-ERROR BannerService: Error fetching banners Request failed with status code 502

@@ -7,10 +7,16 @@ data/
 results/
 *.egg-info/
 
-# NOTE on code/.vscode/: those files are TRACKED, deliberately. gitignore does not
-# apply to already-tracked paths, so listing them here would be misleading. They are
-# IDE logs and caches that churn every session, and they SHOULD eventually leave the
-# repo -- but the removal has to happen from inside the capsule, with `git rm -r
-# --cached code/.vscode` while no code-server session is writing them. Deleting them
-# in a commit pushed from elsewhere makes every capsule sync a delete-vs-modify
-# conflict, 46 of them, which is exactly what happened.
+# VS Code / code-server state written inside the capsule. MUST stay untracked.
+#
+# Tracking these broke fresh clones outright: git aborts the checkout when it cannot
+# write them (the target already has code-server holding those paths open), and every
+# file alphabetically after code/ is then never written -- environment/, src/, tests/,
+# pyproject.toml. A newly cloned capsule came up with no environment/Dockerfile at all
+# and looked like the file had been deleted from the repo.
+#
+# They are also IDE logs, caches and session keys, not source: they churn every session,
+# and code/.vscode/serve-web-key-half is random key material for the code-server web
+# endpoint.
+code/.vscode/
+.vscode/
