@@ -1,5 +1,6 @@
 """Synthetic ground-truth tests. No data assets required -- these run anywhere."""
 import json
+import pathlib
 from pathlib import Path
 
 import numpy as np
@@ -436,3 +437,41 @@ def test_subclass_call_still_uses_subclass_genes():
     sc = A.assign_subclass(means)
     assert sc[0][0] == "Pvalb"
     assert sc[1][0] == "Sst"
+
+
+def test_gene_map_reads_real_ds_config_shape(tmp_path):
+    """GENE_DICT, uppercase and nested under the round number.
+
+    This is the shape real ds_config.json files use. An earlier version read a
+    lowercase "gene_dict" off a "manifest" key -- neither exists in these files -- so
+    every round died with "no gene_dict" before doing any work.
+    """
+    import importlib.util, json
+    spec = importlib.util.spec_from_file_location(
+        "rc", pathlib.Path(__file__).resolve().parent.parent / "code" / "run_capsule.py")
+    rc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rc)
+
+    asset = tmp_path / "HCR_800995_pairwise-unmixing_x"
+    for rnd, n, gd in [("R1", 1, {"488": "GFP", "561": "Slc17a7"}),
+                       ("R5", 5, {"488": "Npy", "514": "Pvalb", "561": "Cck",
+                                  "594": "Sst", "638": "Vip"})]:
+        d = asset / f"800995_{rnd}"
+        d.mkdir(parents=True)
+        (d / "ds_config.json").write_text(json.dumps(
+            {"dataset_folder": "whatever", "ROUND_N": n, "GENE_DICT": {str(n): gd}}))
+
+    assert rc.gene_map_for_round(asset, "800995", "R1") == {"488": "GFP", "561": "Slc17a7"}
+    r5 = rc.gene_map_for_round(asset, "800995", "R5")
+    assert r5["594"] == "Sst" and len(r5) == 5
+
+    # a round that images only 2 channels must not invent the other three
+    assert set(rc.gene_map_for_round(asset, "800995", "R1")) == {"488", "561"}
+
+    # and an unreadable config must say what it looked for
+    bad = asset / "800995_R9"
+    bad.mkdir()
+    (bad / "ds_config.json").write_text(json.dumps({"dataset_folder": "x"}))
+    with pytest.raises(SystemExit) as e:
+        rc.gene_map_for_round(asset, "800995", "R9")
+    assert "GENE_DICT" in str(e.value)

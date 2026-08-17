@@ -90,14 +90,37 @@ def gene_map_for_round(asset_dir, mouse_id, round_key):
     cfg_path = asset_dir / f"{mouse_id}_{round_key}" / "ds_config.json"
     with open(cfg_path) as fh:
         cfg = json.load(fh)
-    manifest = cfg.get("manifest") or cfg
-    gd = manifest.get("gene_dict") or {}
+    # Real ds_config.json files use GENE_DICT (uppercase), keyed by ROUND NUMBER as a
+    # string, with {channel: gene} inside:
+    #     {"GENE_DICT": {"5": {"488": "Npy", "514": "Pvalb", ...}}, "ROUND_N": 5}
+    # An earlier version read a lowercase "gene_dict" off a "manifest" key. Neither
+    # exists in these files -- verified against R1 and R5 of 800995 -- so every round
+    # failed with "no gene_dict". The lowercase/manifest forms are still accepted in
+    # case older assets use them.
+    gd = cfg.get("GENE_DICT") or cfg.get("gene_dict") or {}
+    if not gd:
+        manifest = cfg.get("manifest") or {}
+        gd = manifest.get("gene_dict") or manifest.get("GENE_DICT") or {}
+
+    # GENE_DICT is nested one level under the round number. Prefer the entry matching
+    # this round (ROUND_N, else the digits of round_key); fall back to the sole entry.
+    if gd and all(isinstance(v, dict) for v in gd.values()):
+        want = str(cfg.get("ROUND_N", "")) or "".join(ch for ch in round_key if ch.isdigit())
+        if want in gd:
+            gd = gd[want]
+        elif len(gd) == 1:
+            gd = next(iter(gd.values()))
+
     out = {}
     for chan, entry in gd.items():
         gene = entry.get("gene") if isinstance(entry, dict) else entry
-        out[str(chan)] = gene
+        if gene:
+            out[str(chan)] = str(gene)
     if not out:
-        raise SystemExit(f"no gene_dict in {cfg_path}")
+        raise SystemExit(
+            f"no gene map in {cfg_path}\n"
+            f"  looked for GENE_DICT / gene_dict, then manifest.gene_dict\n"
+            f"  top-level keys present: {sorted(cfg)}")
     return out
 
 
@@ -154,7 +177,10 @@ def main(argv=None):
     print(f"asset   : {asset.name}")
     print(f"rounds  : {', '.join(rounds)}")
     for r in rounds:
-        print(f"  {r}: " + ", ".join(f"{c}={gene_maps[r].get(c)}" for c in CHANS))
+        # Only channels this round actually imaged. R1 uses two of the five, and
+        # printing "514=None" for the rest reads like a failure to read the config.
+        used = ", ".join(f"{c}={g}" for c, g in sorted(gene_maps[r].items()))
+        print(f"  {r}: {used}")
     # Report what will ACTUALLY happen, not what was asked for: the join is silently
     # skipped when the processed asset has no image_spot_detection folder, and a log
     # line claiming otherwise hides a missing-input problem until someone looks for
@@ -186,7 +212,11 @@ def main(argv=None):
         experimenter=args.experimenter)
 
     print("\nper-channel spot change:")
-    print(res["summary"].to_string(index=False))
+    # Suppress channels with no detections: a round that imaged 2 of 5 channels would
+    # otherwise show three gene=None rows of zeros.
+    summ = res["summary"]
+    shown = summ[summ.n_detected > 0] if "n_detected" in summ.columns else summ
+    print(shown.to_string(index=False))
     print(f"\ncell x gene: {res['cellxgene'].shape[0]:,} cells x "
           f"{res['cellxgene'].shape[1]} gene-rounds")
     meta = res.get("metadata")
