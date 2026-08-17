@@ -1,0 +1,165 @@
+2026-08-17 18:42:23.184 [warning] Dir "/root/capsule/.pixi/envs" is not watchable (directory does not exist)
+2026-08-17 18:42:25.347 [info] Starting Environment refresh
+2026-08-17 18:42:25.378 [info] Skipping ActivatedEnv Detection:  process.env.VSCODE_CLI !== '1'
+2026-08-17 18:42:25.427 [info] > hatch env show --json
+2026-08-17 18:42:25.427 [info] cwd: .
+2026-08-17 18:42:25.428 [warning] Failed to check if /root/capsule/.venv/bin/python is an executable [Error: ENOENT: no such file or directory, lstat '/root/capsule/.venv/bin/python'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'lstat',
+  path: '/root/capsule/.venv/bin/python'
+}
+2026-08-17 18:42:25.437 [warning] Identifier for virt-virtualenv failed to identify /root/capsule/.venv/bin/python [Error: ENOENT: no such file or directory, scandir '/root/capsule/.venv/bin'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'scandir',
+  path: '/root/capsule/.venv/bin'
+}
+2026-08-17 18:42:25.547 [info] > ./.venv/bin/python -I /.vscode/extensions/ms-python.python-2025.14.0-universal/python_files/get_output_via_markers.py /.vscode/extensions/ms-python.python-2025.14.0-universal/python_files/interpreterInfo.py
+2026-08-17 18:42:25.633 [error] [Error: Command failed: /root/capsule/.venv/bin/python -I /.vscode/extensions/ms-python.python-2025.14.0-universal/python_files/get_output_via_markers.py /.vscode/extensions/ms-python.python-2025.14.0-universal/python_files/interpreterInfo.py
+/bin/sh: 1: /root/capsule/.venv/bin/python: not found
+
+	at genericNodeError (node:internal/errors:984:15)
+	at wrappedFn (node:internal/errors:538:14)
+	at ChildProcess.exithandler (node:child_process:422:12)
+	at ChildProcess.emit (node:events:536:35)
+	at maybeClose (node:internal/child_process:1104:16)
+	at Socket.<anonymous> (node:internal/child_process:456:11)
+	at Socket.emit (node:events:524:28)
+	at Pipe.<anonymous> (node:net:343:12)] {
+  code: 127,
+  killed: false,
+  signal: null,
+  cmd: '/root/capsule/.venv/bin/python -I /.vscode/extensions/ms-python.python-2025.14.0-universal/python_files/get_output_via_markers.py /.vscode/extensions/ms-python.python-2025.14.0-universal/python_files/interpreterInfo.py'
+}
+2026-08-17 18:42:25.637 [info] Environments refresh finished (event): 291 milliseconds
+2026-08-17 18:42:25.637 [info] Environments refresh paths discovered: 291 milliseconds
+2026-08-17 18:42:25.639 [info] Environment refresh took 293 milliseconds
+2026-08-17 18:42:25.643 [info] > pyenv which python
+2026-08-17 18:42:25.643 [info] cwd: .
+2026-08-17 18:42:25.761 [warning] Failed to check if /root/capsule/.venv/bin/python is an executable [Error: ENOENT: no such file or directory, lstat '/root/capsule/.venv/bin/python'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'lstat',
+  path: '/root/capsule/.venv/bin/python'
+}
+2026-08-17 18:42:25.761 [warning] Failed to check if /root/capsule/.venv/bin/python is an executable [Error: ENOENT: no such file or directory, lstat '/root/capsule/.venv/bin/python'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'lstat',
+  path: '/root/capsule/.venv/bin/python'
+}
+2026-08-17 18:42:25.762 [warning] Identifier for virt-virtualenv failed to identify /root/capsule/.venv/bin/python [Error: ENOENT: no such file or directory, scandir '/root/capsule/.venv/bin'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'scandir',
+  path: '/root/capsule/.venv/bin'
+}
+2026-08-17 18:42:25.762 [warning] Identifier for virt-virtualenv failed to identify /root/capsule/.venv/bin/python [Error: ENOENT: no such file or directory, scandir '/root/capsule/.venv/bin'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'scandir',
+  path: '/root/capsule/.venv/bin'
+}
+2026-08-17 18:42:27.637 [info] > ./.venv/bin/python -I /.vscode/extensions/ms-python.python-2025.14.0-universal/python_files/get_output_via_markers.py /.vscode/extensions/ms-python.python-2025.14.0-universal/python_files/interpreterInfo.py
+2026-08-17 18:42:27.638 [error] [Error: Command failed: /root/capsule/.venv/bin/python -I /.vscode/extensions/ms-python.python-2025.14.0-universal/python_files/get_output_via_markers.py /.vscode/extensions/ms-python.python-2025.14.0-universal/python_files/interpreterInfo.py
+/bin/sh: 1: /root/capsule/.venv/bin/python: not found
+
+	at genericNodeError (node:internal/errors:984:15)
+	at wrappedFn (node:internal/errors:538:14)
+	at ChildProcess.exithandler (node:child_process:422:12)
+	at ChildProcess.emit (node:events:536:35)
+	at maybeClose (node:internal/child_process:1104:16)
+	at Socket.<anonymous> (node:internal/child_process:456:11)
+	at Socket.emit (node:events:524:28)
+	at Pipe.<anonymous> (node:net:343:12)] {
+  code: 127,
+  killed: false,
+  signal: null,
+  cmd: '/root/capsule/.venv/bin/python -I /.vscode/extensions/ms-python.python-2025.14.0-universal/python_files/get_output_via_markers.py /.vscode/extensions/ms-python.python-2025.14.0-universal/python_files/interpreterInfo.py'
+}
+2026-08-17 18:42:27.639 [error] Unable to start Jedi language server as a valid interpreter is not selected
+2026-08-17 18:42:27.641 [warning] Failed to check if /root/capsule/.venv/bin/python is an executable [Error: ENOENT: no such file or directory, lstat '/root/capsule/.venv/bin/python'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'lstat',
+  path: '/root/capsule/.venv/bin/python'
+}
+2026-08-17 18:42:27.642 [warning] Identifier for virt-virtualenv failed to identify /root/capsule/.venv/bin/python [Error: ENOENT: no such file or directory, scandir '/root/capsule/.venv/bin'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'scandir',
+  path: '/root/capsule/.venv/bin'
+}
+2026-08-17 18:42:27.827 [warning] Failed to check if /root/capsule/.venv/bin/python is an executable [Error: ENOENT: no such file or directory, lstat '/root/capsule/.venv/bin/python'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'lstat',
+  path: '/root/capsule/.venv/bin/python'
+}
+2026-08-17 18:42:27.828 [warning] Failed to check if /root/capsule/.venv/bin/python is an executable [Error: ENOENT: no such file or directory, lstat '/root/capsule/.venv/bin/python'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'lstat',
+  path: '/root/capsule/.venv/bin/python'
+}
+2026-08-17 18:42:27.829 [warning] Identifier for virt-virtualenv failed to identify /root/capsule/.venv/bin/python [Error: ENOENT: no such file or directory, scandir '/root/capsule/.venv/bin'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'scandir',
+  path: '/root/capsule/.venv/bin'
+}
+2026-08-17 18:42:27.829 [warning] Identifier for virt-virtualenv failed to identify /root/capsule/.venv/bin/python [Error: ENOENT: no such file or directory, scandir '/root/capsule/.venv/bin'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'scandir',
+  path: '/root/capsule/.venv/bin'
+}
+2026-08-17 18:47:08.499 [warning] Failed to check if /root/capsule/.venv/bin/python is an executable [Error: ENOENT: no such file or directory, lstat '/root/capsule/.venv/bin/python'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'lstat',
+  path: '/root/capsule/.venv/bin/python'
+}
+2026-08-17 18:47:08.500 [warning] Identifier for virt-virtualenv failed to identify /root/capsule/.venv/bin/python [Error: ENOENT: no such file or directory, scandir '/root/capsule/.venv/bin'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'scandir',
+  path: '/root/capsule/.venv/bin'
+}
+2026-08-17 18:47:08.501 [warning] Failed to check if /root/capsule/.venv/bin/python is an executable [Error: ENOENT: no such file or directory, lstat '/root/capsule/.venv/bin/python'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'lstat',
+  path: '/root/capsule/.venv/bin/python'
+}
+2026-08-17 18:47:08.502 [warning] Identifier for virt-virtualenv failed to identify /root/capsule/.venv/bin/python [Error: ENOENT: no such file or directory, scandir '/root/capsule/.venv/bin'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'scandir',
+  path: '/root/capsule/.venv/bin'
+}
+2026-08-17 18:47:08.504 [warning] Failed to check if /root/capsule/.venv/bin/python is an executable [Error: ENOENT: no such file or directory, lstat '/root/capsule/.venv/bin/python'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'lstat',
+  path: '/root/capsule/.venv/bin/python'
+}
+2026-08-17 18:47:08.505 [warning] Identifier for virt-virtualenv failed to identify /root/capsule/.venv/bin/python [Error: ENOENT: no such file or directory, scandir '/root/capsule/.venv/bin'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'scandir',
+  path: '/root/capsule/.venv/bin'
+}
+2026-08-17 18:48:45.615 [warning] Failed to check if /root/capsule/.venv/bin/python is an executable [Error: ENOENT: no such file or directory, lstat '/root/capsule/.venv/bin/python'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'lstat',
+  path: '/root/capsule/.venv/bin/python'
+}
+2026-08-17 18:48:45.616 [warning] Identifier for virt-virtualenv failed to identify /root/capsule/.venv/bin/python [Error: ENOENT: no such file or directory, scandir '/root/capsule/.venv/bin'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'scandir',
+  path: '/root/capsule/.venv/bin'
+}

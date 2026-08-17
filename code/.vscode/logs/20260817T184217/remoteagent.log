@@ -1,0 +1,124 @@
+2026-08-17 18:42:17.324 [info] 
+
+
+
+
+2026-08-17 18:42:17.334 [info] Extension host agent started.
+2026-08-17 18:42:19.427 [info] [10.0.156.134][5b329ba4][ManagementConnection] New connection established.
+2026-08-17 18:42:20.142 [info] ComputeTargetPlatform: linux-x64
+2026-08-17 18:42:20.446 [info] [10.0.156.134][0ebb062a][ExtensionHostConnection] New connection established.
+2026-08-17 18:42:21.127 [info] [10.0.156.134][0ebb062a][ExtensionHostConnection] <93> Launched Extension Host Process.
+2026-08-17 18:42:22.325 [info] ComputeTargetPlatform: linux-x64
+2026-08-17 18:42:33.384 [info] [10.0.156.134][0ebb062a][ExtensionHostConnection] <93> {
+  resource: {
+    attributes: {
+      'service.name': 'cline',
+      'telemetry.sdk.language': 'nodejs',
+      'telemetry.sdk.name': 'opentelemetry',
+      'telemetry.sdk.version': '1.29.0',
+      'service.version': '3.35.1'
+    }
+  },
+  instrumentationScope: { name: 'cline', version: undefined, schemaUrl: undefined },
+  timestamp: 1786992148382000,
+  traceId: undefined,
+  spanId: undefined,
+  traceFlags: undefined,
+  severityText: 'INFO',
+  severityNumber: undefined,
+  body: 'user.telemetry_enabled',
+  attributes: {
+    distinct_id: '25d5195752fe5d845636dea221e945ad4912d04b6d8c0691dac4c7be53b45965',
+    extension_version: '3.35.1',
+    platform: 'code-server',
+    platform_version: '1.100.3',
+    os_type: 'linux',
+    os_version: '#1 SMP PREEMPT_DYNAMIC Mon Jul 27 20:28:29 UTC 2026',
+    is_dev: false
+  }
+}
+
+2026-08-17 18:42:33.385 [info] [10.0.156.134][0ebb062a][ExtensionHostConnection] <93> {
+  resource: {
+    attributes: {
+      'service.name': 'cline',
+      'telemetry.sdk.language': 'nodejs',
+      'telemetry.sdk.name': 'opentelemetry',
+      'telemetry.sdk.version': '1.29.0',
+      'service.version': '3.35.1'
+    }
+  },
+  instrumentationScope: { name: 'cline', version: undefined, schemaUrl: undefined },
+  timestamp: 1786992148382000,
+  traceId: undefined,
+  spanId: undefined,
+  traceFlags: undefined,
+  severityText: 'INFO',
+  severityNumber: undefined,
+  body: 'user.extension_activated',
+  attributes: {
+    distinct_id: '25d5195752fe5d845636dea221e945ad4912d04b6d8c0691dac4c7be53b45965'
+  }
+}
+
+2026-08-17 18:42:33.385 [info] [10.0.156.134][0ebb062a][ExtensionHostConnection] <93> {
+  resource: {
+    attributes: {
+      'service.name': 'cline',
+      'telemetry.sdk.language': 'nodejs',
+      'telemetry.sdk.name': 'opentelemetry',
+      'telemetry.sdk.version': '1.29.0',
+      'service.version': '3.35.1'
+    }
+  },
+  instrumentationScope: { name: 'cline', version: undefined, schemaUrl: undefined },
+  timestamp: 1786992148382000,
+  traceId: undefined,
+  spanId: undefined,
+  traceFlags: undefined,
+  severityText: 'INFO',
+  severityNumber: undefined,
+  body: 'user.telemetry_enabled',
+  attributes: {
+    distinct_id: '25d5195752fe5d845636dea221e945ad4912d04b6d8c0691dac4c7be53b45965',
+    extension_version: '3.35.1',
+    platform: 'code-server',
+    platform_version: '1.100.3',
+    os_type: 'linux',
+    os_version: '#1 SMP PREEMPT_DYNAMIC Mon Jul 27 20:28:29 UTC 2026',
+    is_dev: false
+  }
+}
+
+2026-08-17 18:42:33.385 [info] [10.0.156.134][0ebb062a][ExtensionHostConnection] <93> {
+  resource: {
+    attributes: {
+      'service.name': 'cline',
+      'telemetry.sdk.language': 'nodejs',
+      'telemetry.sdk.name': 'opentelemetry',
+      'telemetry.sdk.version': '1.29.0',
+      'service.version': '3.35.1'
+    }
+  },
+  instrumentationScope: { name: 'cline', version: undefined, schemaUrl: undefined },
+  timestamp: 1786992148383000,
+  traceId: undefined,
+  spanId: undefined,
+  traceFlags: undefined,
+  severityText: 'INFO',
+  severityNumber: undefined,
+  body: 'user.auth_logged_out',
+  attributes: {
+    distinct_id: '25d5195752fe5d845636dea221e945ad4912d04b6d8c0691dac4c7be53b45965',
+    provider: 'cline',
+    reason: 'error_recovery',
+    extension_version: '3.35.1',
+    platform: 'code-server',
+    platform_version: '1.100.3',
+    os_type: 'linux',
+    os_version: '#1 SMP PREEMPT_DYNAMIC Mon Jul 27 20:28:29 UTC 2026',
+    is_dev: false
+  }
+}
+
+2026-08-17 18:48:54.183 [info] [10.0.156.134][5b329ba4][ManagementConnection] The client has disconnected gracefully, so the connection will be disposed.
