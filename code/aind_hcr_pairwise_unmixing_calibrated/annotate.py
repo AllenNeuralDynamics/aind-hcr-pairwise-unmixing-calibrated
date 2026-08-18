@@ -42,11 +42,7 @@ CLASS_MARKERS = {"excitatory": "Slc17a7", "inhibitory": "Gad2"}
 #: interneuron types). A cell strongly expressing any canonical interneuron marker is
 #: inhibitory whether or not its Gad2 reading cleared the threshold.
 #:
-#: GFP is included because in this preparation it is an interneuron reporter, so a
-#: GFP-high cell is inhibitory evidence like any other marker here. That makes GFP a
-#: GATE rather than a measurement, which is why GATE_GENES also bars it from cluster
-#: names -- naming a cluster after the reporter that selected it is circular.
-INHIBITORY_MARKERS = ("Gad2", "Pvalb", "Vip", "Sst", "GFP")
+INHIBITORY_MARKERS = ("Gad2", "Pvalb", "Vip", "Sst")
 
 #: Genes barred from cluster marker names on top of the subclass genes. Round 6
 #: (Sncg, Adra1b, Cnr1, Adra1a, Htr3a) is excluded by request: those genes are broadly
@@ -54,9 +50,12 @@ INHIBITORY_MARKERS = ("Gad2", "Pvalb", "Vip", "Sst", "GFP")
 #: cluster. They still participate in clustering and in the plotted matrix.
 ROUND6_GENES = ("Sncg", "Adra1b", "Cnr1", "Adra1a", "Htr3a")
 
-#: Also barred from marker names: the class gates and the reporter. Gad2 and Slc17a7
-#: are what DEFINE the class, so naming an inhibitory cluster after Gad2 is circular,
-#: and "Lamp5-1 (Slc17a7/...)" reads as a contradiction. GFP is a reporter, not biology.
+#: Barred from marker names. Gad2 and Slc17a7 DEFINE the class, so naming an inhibitory
+#: cluster after Gad2 is circular and "Lamp5-1 (Slc17a7/...)" reads as a contradiction.
+#: GFP is barred as a reporter rather than biology: with it nameable, k-means produced
+#: "Pvalb-4 (GFP)" -- a cluster whose only distinguishing feature was reporter
+#: brightness, which tracks labelling efficiency, not cell type. GFP is NOT a class gate
+#: (see INHIBITORY_MARKERS) and still participates in clustering and the plotted matrix.
 GATE_GENES = ("Gad2", "Slc17a7", "GFP")
 
 #: Canonical inhibitory subclasses, in the order clusters are grouped.
@@ -97,28 +96,46 @@ def gene_column(table, gene):
 
 def normalize_cellxgene(table, depth_scale=DEPTH_SCALE,
                         gene_percentile=GENE_PERCENTILE):
-    """Two-stage normalization: per-cell depth, then per-gene scale.
+    """Two-stage normalization: per-cell MEAN, then per-gene percentile scale.
 
-    Returns (normalized DataFrame, info dict). Cells with zero total are dropped from
-    the normalized matrix -- they carry no information and would divide by zero.
+    Returns (normalized DataFrame, info dict). `depth_scale` is accepted for backward
+    compatibility and ignored -- stage 1 is always the cell's own mean.
     """
     counts = table.to_numpy(float)
-    totals = counts.sum(1)
-    keep = totals > 0
-    target = (np.median(totals[keep]) if depth_scale == "median"
-              else float(np.mean(totals[keep])))
+
+    # STAGE 1 -- per-cell depth. Each cell is divided by ITS OWN mean gene count, so the
+    # unit becomes "relative to this cell's typical gene". A cell twice as brightly
+    # detected has twice the mean and divides out, which is the point: raw counts
+    # cluster on detection depth (it spans two orders of magnitude here) rather than on
+    # identity.
+    #
+    # The MEAN rather than the median: with a panel this size (27 genes) a sparse cell's
+    # median is frequently 0 -- 11,993 of 76,143 cells (15.8%) on 800995 -- and those
+    # cells cannot be scaled at all. The mean is positive whenever ANY gene is detected,
+    # so every cell with a single transcript is scalable and none are dropped.
+    cell_mean = counts.mean(axis=1)
+    keep = cell_mean > 0
 
     scaled = np.zeros_like(counts)
-    scaled[keep] = counts[keep] / totals[keep, None] * target
+    scaled[keep] = counts[keep] / cell_mean[keep, None]
 
+    # STAGE 2 -- per-gene scale. Divide each gene by its own high percentile over the
+    # scalable cells and clip to 1, so a rare gene and an abundant one are comparable.
+    # The percentile rather than the max keeps a few outlier cells from compressing
+    # everything else into the bottom of the range.
     pct = np.percentile(scaled[keep], gene_percentile, axis=0)
     pct[pct <= 0] = 1.0
     scaled = np.clip(scaled / pct, 0, 1)
 
-    info = dict(depth_scale=depth_scale, depth_target=float(target),
+    info = dict(depth_scale="per_cell_mean",
+                cell_mean_summary=dict(
+                    mean=float(np.mean(cell_mean[keep])) if keep.any() else 0.0,
+                    median=float(np.median(cell_mean[keep])) if keep.any() else 0.0,
+                    min=float(cell_mean[keep].min()) if keep.any() else 0.0,
+                    max=float(cell_mean.max())),
                 gene_percentile=gene_percentile,
                 gene_scale={c: float(p) for c, p in zip(table.columns, pct)},
-                n_zero_total_cells=int((~keep).sum()))
+                n_zero_mean_cells=int((~keep).sum()))
     return pd.DataFrame(scaled, index=table.index, columns=table.columns), info
 
 
@@ -177,9 +194,16 @@ def assign_class(table, min_counts=MIN_CLASS_COUNTS, markers=CLASS_MARKERS,
 
 
 def _kmeans(matrix, k, seed=RANDOM_SEED):
+    """k-means on the normalized matrix DIRECTLY -- no z-scoring.
+
+    normalize_cellxgene already puts every gene on a common [0, 1] scale, so the
+    matrix is the intended clustering space. Z-scoring on top of it re-inflated each
+    gene to unit variance, which undoes that: a gene detected in a handful of cells
+    gets the same variance budget as a gene carrying real structure, and distances
+    stop reflecting expression level.
+    """
     from sklearn.cluster import KMeans
-    z = (matrix - matrix.mean(0)) / (matrix.std(0) + 1e-9)
-    return KMeans(n_clusters=k, n_init=10, random_state=seed).fit_predict(z)
+    return KMeans(n_clusters=k, n_init=10, random_state=seed).fit_predict(matrix)
 
 
 def cluster_marker_names(cluster_means, prefix_by_cluster, n_markers=3,
@@ -215,11 +239,19 @@ def cluster_marker_names(cluster_means, prefix_by_cluster, n_markers=3,
 
 def assign_subclass(cluster_means, subclass_genes=SUBCLASS_GENES,
                     min_enrichment=MIN_SUBCLASS_ENRICHMENT):
-    """Each cluster's subclass = the canonical marker most enriched in it.
+    """Each cluster's subclass = the canonical marker with the HIGHEST EXPRESSION in it.
 
-    Enrichment, not raw level: an abundant gene would otherwise win everywhere. A
-    cluster whose best marker falls under min_enrichment gets None rather than a
-    subclass it has no evidence for.
+    Level, not enrichment. The enrichment version (cluster mean / across-cluster mean)
+    produced labels that contradicted the cluster's own data: three Lamp5 clusters where
+    Sst or Pvalb was in fact the higher-expressing marker, because Lamp5 was merely more
+    ENRICHED relative to other clusters. Reading the label off the highest marker means
+    the heatmap and the label always agree -- what you see in the Pvalb column is why
+    the row says Pvalb.
+
+    Both matrices are on the same normalized scale, so the four markers are directly
+    comparable. `min_enrichment` is still applied as a floor on the winner's enrichment,
+    so a cluster with no marker standing out at all gets None instead of whichever of
+    four flat values happened to be largest.
     """
     overall = cluster_means.mean(0)
     overall[overall <= 0] = 1e-9
@@ -236,7 +268,9 @@ def assign_subclass(cluster_means, subclass_genes=SUBCLASS_GENES,
         if not cols:
             out[cid] = (None, np.nan)
             continue
-        best = max(cols, key=lambda g: enrich.loc[cid, cols[g]])
+        # winner by EXPRESSION LEVEL
+        best = max(cols, key=lambda g: cluster_means.loc[cid, cols[g]])
+        # enrichment of that winner, kept as the evidence floor and reported in uns
         val = float(enrich.loc[cid, cols[best]])
         out[cid] = (best if val >= min_enrichment else None, val)
     return out
@@ -261,9 +295,14 @@ def cluster_by_class(normalized, classes, n_inh=N_CLUSTERS_INH, n_exc=N_CLUSTERS
     info = {}
     offset = 0
 
+    # Cells that could not be depth-normalized (median gene count 0) are all-zero rows.
+    # Clustering them would let a fabricated profile form its own cluster, so they are
+    # left unclustered (cluster_id -1) exactly like the unassigned class.
+    scalable = normalized.index[normalized.to_numpy().sum(1) > 0]
+
     for cls, k in (("inhibitory", n_inh), ("excitatory", n_exc)):
         sel = classes[classes == cls].index
-        sel = normalized.index.intersection(sel)
+        sel = normalized.index.intersection(sel).intersection(scalable)
         if len(sel) < k:
             info[cls] = dict(n_cells=int(len(sel)), n_clusters=0,
                              note="too few cells to cluster")

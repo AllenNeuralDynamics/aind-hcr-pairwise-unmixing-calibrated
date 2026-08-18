@@ -392,7 +392,49 @@ def test_normalization_is_reversible_in_shape_and_bounded():
     assert norm.shape == t.shape
     assert float(norm.to_numpy().max()) <= 1.0 + 1e-9        # clipped at the 95th pct
     assert float(norm.to_numpy().min()) >= 0.0
-    assert info["depth_scale"] == "median"
+    assert info["depth_scale"] == "per_cell_mean"
+    # the MEAN is why no cell is dropped: it is positive whenever any gene is detected,
+    # where a 27-gene panel leaves ~16% of real cells with a median of 0
+    assert info["n_zero_mean_cells"] == 0
+
+
+def test_no_cell_is_dropped_by_depth_normalization():
+    """Every cell with at least one transcript is scalable."""
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table(n_inh=5, n_exc=5)
+    t.iloc[0, :] = 0.0                     # completely empty cell
+    t.iloc[1, :] = 0.0
+    t.iloc[1, 0] = 1.0                     # a single transcript in one gene
+    norm, info = A.normalize_cellxgene(t)
+    assert info["n_zero_mean_cells"] == 1, "only the all-zero cell is unscalable"
+    assert float(norm.iloc[1].sum()) > 0, "one transcript is enough to be scaled"
+    # a median-based stage 1 would have failed BOTH: with 8 genes, one nonzero gene
+    # still leaves a median of 0
+    assert float(np.median(t.iloc[1].to_numpy())) == 0.0
+
+
+def test_subclass_is_the_highest_expressing_marker_not_the_most_enriched():
+    """Level, not enrichment -- so the label never contradicts the heatmap.
+
+    Pvalb is the highest-expressing marker in cluster 0, but Lamp5 is far more
+    ENRICHED there (10x its across-cluster mean, versus 1.8x for Pvalb). The old
+    enrichment rule labelled such clusters Lamp5 while the Pvalb column was visibly
+    darker; three real clusters on 800995 had exactly this contradiction.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    means = pd.DataFrame(
+        {"R5-514-Pvalb": [0.90, 0.10],     # cluster 0 highest here
+         "R4-488-Lamp5": [0.40, 0.00],     # but far more enriched here
+         "R5-594-Sst":   [0.05, 0.80],
+         "R5-638-Vip":   [0.05, 0.05]},
+        index=[0, 1])
+    enrich0 = means.loc[0] / means.mean(0)
+    assert enrich0["R4-488-Lamp5"] > enrich0["R5-514-Pvalb"], "fixture must be enrichment-inverted"
+    sc = A.assign_subclass(means)
+    assert sc[0][0] == "Pvalb", "subclass must follow expression level"
+    assert sc[1][0] == "Sst"
 
 
 def test_clusters_named_by_subclass_and_numbered():

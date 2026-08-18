@@ -407,10 +407,20 @@ adata                       # e.g. 74,171 cells x 27 genes
 **`adata.X`** — raw transcript counts, cells × genes. Integers.
 
 **`adata.layers["normalized"]`** — the same matrix after the two-stage transform used
-for clustering: each cell divided by its own total and rescaled to the median cell
-total, then each gene divided by its 95th percentile and clipped to 1. Cluster labels
-were computed on **this**, not on `X`, because per-cell detection depth spans two orders
-of magnitude and raw counts cluster on depth rather than identity.
+for clustering:
+
+1. each cell divided by **its own mean gene count**, so the unit is "relative to this cell's typical gene" and detection depth divides out;
+2. each gene divided by its own 95th percentile across cells, clipped to [0, 1], so a rare gene and an abundant one are comparable.
+
+Cluster labels were computed on **this**, not on `X`: per-cell detection depth spans two
+orders of magnitude, and raw counts cluster on depth rather than identity. k-means runs
+on this matrix **directly** — no z-scoring, since stage 2 already puts every gene on a
+common scale and re-inflating each to unit variance would give a gene detected in a
+handful of cells the same weight as one carrying real structure.
+
+The mean rather than the median in stage 1 is deliberate: with 27 genes a sparse cell's
+median is often 0 (11,993 of 76,143 cells on 800995), and those cells cannot be scaled at
+all. The mean is positive whenever any gene is detected, so no cell is dropped.
 
 **`adata.var`** — one row per gene, with `round`, `channel`, `gene`. The index is
 `R5-561-Cck` style, so the same gene imaged in two rounds stays distinguishable.
@@ -420,7 +430,7 @@ of magnitude and raw counts cluster on depth rather than identity.
 | column | meaning |
 |---|---|
 | `class` | `inhibitory` if ANY of Gad2, Pvalb, Vip, Sst, GFP is ≥ `MIN_CLASS_COUNTS` (100); `excitatory` if Slc17a7 clears it and no inhibitory marker does; else `unassigned`. Gad2 alone under-calls badly — on 800995 it labels 3,401 cells where the five-marker rule finds 11,337, and GFP (an interneuron reporter here) is the largest single contributor at 11,835 positive cells. A cell clearing BOTH Gad2 and Slc17a7 stays `unassigned` rather than being guessed: that pattern is usually two merged cells or residual contamination |
-| `subclass` | `Pvalb` / `Sst` / `Vip` / `Lamp5` for inhibitory clusters, by which canonical marker is most *enriched* in the cluster (cluster mean ÷ across-cluster mean), not which is highest |
+| `subclass` | `Pvalb` / `Sst` / `Vip` / `Lamp5` for inhibitory clusters, by which canonical marker has the **highest expression** in the cluster, so the label never contradicts the heatmap. Enrichment (cluster mean ÷ across-cluster mean) is still applied as a floor of 1.2 on the winner, so a cluster with no marker standing out gets no subclass rather than whichever of four flat values was largest |
 | `cluster` | readable name, e.g. `Pvalb-2 (Mme/Calb1/Cck)` — subclass, index within subclass, then the top differentially expressed genes. Subclass genes are excluded from the marker list, since the subclass is already the prefix |
 | `cluster_id` | integer label; `-1` for cells that were not clustered (unassigned class) |
 | `total_counts`, `n_genes` | per-cell depth and the number of genes detected |
