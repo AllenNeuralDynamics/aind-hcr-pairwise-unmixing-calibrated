@@ -435,36 +435,78 @@ Clustering is computed **fresh from this matrix** — no external reference or
 pre-existing labels are used, so cluster identity is not comparable across mice or
 across runs unless you fit once and apply.
 
-A quick look, per cell, inhibitory only:
+### Plotting it
+
+Use the lab's `standard-cellxgene-plot-formatting` skill rather than hand-rolling a
+heatmap. **Load it first** — `skill({skill: "standard-cellxgene-plot-formatting"})` in
+Claude Science, which puts `cellxgene_heatmap`, `check_gene_panel` and
+`normalize_cellxgene` into the kernel; the snippets below assume they are in scope and
+raise `NameError` otherwise. Prefer it to a hand-written heatmap — it encodes the settled conventions (subclass-ordered rows, Allen/Tasic
+subclass colour bars, the fixed 27-gene x-axis, `Subclass(markers)` cluster names, a
+cell-count y-axis, empty-cluster QC). Load it, then convert the `.h5ad` into the
+`(expr, cluster_labels, sorted_cell_ids)` triplet it expects:
 
 ```python
-import numpy as np, matplotlib.pyplot as plt
+import anndata as ad
+import pandas as pd
 
-inh = adata[adata.obs["class"] == "inhibitory"]
-inh = inh[inh.obs.sort_values(["cluster_id", "total_counts"]).index]   # group by cluster
-M = inh.layers["normalized"]
-M = M.toarray() if hasattr(M, "toarray") else M
+adata = ad.read_h5ad("800995_cellxgene_annotated.h5ad")   # 76,143 cells x 27 genes
 
-fig, ax = plt.subplots(figsize=(7, 10))
-im = ax.imshow(M, aspect="auto", cmap="Greys", vmin=0, vmax=1, interpolation="nearest")
-ax.set_xticks(range(inh.n_vars))
-ax.set_xticklabels(inh.var["gene"], rotation=90, fontsize=7)
-# one tick per cluster, at its midpoint
-ids = inh.obs["cluster_id"].to_numpy()
-bounds = np.flatnonzero(np.diff(ids)) + 1
-mids = np.convolve(np.r_[0, bounds, len(ids)], [.5, .5], "valid")
-ax.set_yticks(mids)
-ax.set_yticklabels(inh.obs["cluster"].to_numpy()[mids.astype(int)], fontsize=7)
-for b in bounds:
-    ax.axhline(b, color="firebrick", lw=0.4)
-ax.set_ylabel(f"{inh.n_obs:,} inhibitory cells, grouped by cluster")
-fig.colorbar(im, ax=ax, label="expression (fraction of gene's 95th pct)")
-fig.savefig("cellxgene.png", dpi=200, bbox_inches="tight")
+def triplet(adata, cell_class=None):
+    """(expr, cluster_labels, sorted_cell_ids) for the plotting skill."""
+    a = adata if cell_class is None else adata[adata.obs["class"] == cell_class]
+    a = a[a.obs.cluster_id >= 0]                          # drop unclustered cells
+    X = a.X.toarray() if hasattr(a.X, "toarray") else a.X
+    expr = pd.DataFrame(X, index=a.obs_names,
+                        columns=a.var["gene"]).reset_index(names="cell_id")
+    expr = expr.rename(columns={"Tac": "Tac1"})           # standard-order gene name
+    labels = pd.DataFrame({"cell_id": a.obs_names,
+                           "cluster": a.obs.cluster_id.to_numpy()})
+    order = a.obs.sort_values(["cluster_id", "total_counts"]).index
+    return expr, labels, pd.DataFrame({"cell_id": order})
 ```
 
-For the lab's standard version of this figure — cluster naming, ordering, and axis
-conventions applied automatically — load the `standard-cellxgene-plot-formatting` skill
-instead of hand-rolling it.
+`check_gene_panel` confirms the panel before you trust a figure — with all six rounds
+it reports a full 27-gene match; a missing gene usually means a round was left out.
+
+**All cells.** `include_excit=True` folds Slc17a7⁺ cells into one Excitatory block:
+
+```python
+expr, labels, ids = triplet(adata)
+check_gene_panel([c for c in expr.columns if c != "cell_id"])
+
+fig, summary, info = cellxgene_heatmap(
+    expr, labels, ids,
+    include_excit=True,
+    display="normalized",        # or "raw" for transcript counts
+    subtitle="800995 · all cells · 6 rounds, 27 genes",
+    outfile="all_cells.png")
+```
+
+**Inhibitory only.** `include_excit=False`, since there is no excitatory block:
+
+```python
+expr, labels, ids = triplet(adata, cell_class="inhibitory")
+
+fig, summary, info = cellxgene_heatmap(
+    expr, labels, ids,
+    include_excit=False,
+    display="normalized",
+    subtitle="800995 · inhibitory cells · 6 rounds, 27 genes",
+    outfile="inhibitory.png")
+```
+
+![All cells](docs/example_all_cells.png)
+
+![Inhibitory only](docs/example_inhibitory.png)
+
+`summary` is the per-cluster table (group, subclass, `Subclass(markers)` name, cell
+count); `info` reports which clusters were dropped as empty. Both examples were run
+against a real six-round `.h5ad` — the all-cells panel gives 32 clusters over 55,565
+classified cells, the inhibitory panel 20 clusters over 3,401.
+
+Note that `display=` controls only the colour scale: clustering was done on the
+normalised matrix either way, so the two modes show the same rows in the same order.
 
 ### Runtime
 
