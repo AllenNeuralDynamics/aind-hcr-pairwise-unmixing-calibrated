@@ -417,10 +417,11 @@ def test_no_cell_is_dropped_by_depth_normalization():
 def test_subclass_is_the_highest_expressing_marker_not_the_most_enriched():
     """Level, not enrichment -- so the label never contradicts the heatmap.
 
-    Pvalb is the highest-expressing marker in cluster 0, but Lamp5 is far more
-    ENRICHED there (10x its across-cluster mean, versus 1.8x for Pvalb). The old
-    enrichment rule labelled such clusters Lamp5 while the Pvalb column was visibly
-    darker; three real clusters on 800995 had exactly this contradiction.
+    Pvalb is the highest-expressing marker in cluster 0 (0.90 vs Lamp5's 0.40), but
+    Lamp5 is the more ENRICHED one: 0.40/0.20 = 2.00x its across-cluster mean, against
+    0.90/0.50 = 1.80x for Pvalb. The old enrichment rule labelled such clusters Lamp5
+    while the Pvalb column was visibly darker; three real clusters on 800995 had exactly
+    this contradiction.
     """
     from aind_hcr_pairwise_unmixing_calibrated import annotate as A
 
