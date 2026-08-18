@@ -475,3 +475,64 @@ def test_gene_map_reads_real_ds_config_shape(tmp_path):
     with pytest.raises(SystemExit) as e:
         rc.gene_map_for_round(asset, "800995", "R9")
     assert "GENE_DICT" in str(e.value)
+
+
+def test_every_import_is_declared_in_the_environment():
+    """Every third-party import must be installed by environment.json.
+
+    scikit-learn was missing: it is not in the base image and, unlike numpy/pandas/
+    scipy/h5py, nothing else pulls it in (anndata requires those four, not sklearn).
+    The build succeeded and the run then died on `import sklearn`. This test fails at
+    development time instead.
+
+    Import name -> distribution name where they differ, plus the two packages that are
+    needed at run time without being imported directly: pyarrow (pandas parquet engine)
+    and h5py (anndata's h5ad writer).
+    """
+    import ast
+    import sys
+
+    dist_of = {"sklearn": "scikit-learn"}
+    indirect = {"pyarrow", "h5py"}
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    env = json.loads((root / ".codeocean" / "environment.json").read_text())
+    declared = {p["name"] for p in env["installers"]["pip"]["packages"]}
+
+    imported = set()
+    for path in list((root / "src").rglob("*.py")) + list((root / "code").glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Import):
+                imported |= {a.name.split(".")[0] for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                imported.add(node.module.split(".")[0])
+
+    third_party = {m for m in imported
+                   if m not in sys.stdlib_module_names
+                   and m != "aind_hcr_pairwise_unmixing_calibrated"}
+
+    # A package counts as satisfied if it is declared outright, or is a dependency of
+    # anndata (h5py, numpy, pandas, scipy), which environment.json does declare.
+    via_anndata = {"numpy", "pandas", "scipy", "h5py"}
+    missing = sorted(
+        m for m in (third_party | indirect)
+        if dist_of.get(m, m) not in declared and m not in via_anndata
+    )
+    assert not missing, (
+        f"imported/needed but not installed by environment.json: {missing}\n"
+        f"declared: {sorted(declared)}")
+
+
+def test_dockerfile_hash_header_matches_body():
+    """Code Ocean recognises a generated Dockerfile by `# hash:sha256:<sha of body>`.
+
+    Editing the Dockerfile without recomputing the hash makes CO treat it as
+    hand-written: the Environment tab renders nothing and a UI edit overwrites it.
+    """
+    import hashlib
+
+    raw = (pathlib.Path(__file__).resolve().parent.parent
+           / "environment" / "Dockerfile").read_text()
+    first, body = raw.split("\n", 1)
+    assert first.startswith("# hash:sha256:"), first
+    assert first.split(":")[-1] == hashlib.sha256(body.encode()).hexdigest()

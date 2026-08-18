@@ -17,6 +17,10 @@
 				{
 					"name": "pyarrow",
 					"version": "24.0.0"
+				},
+				{
+					"name": "scikit-learn",
+					"version": "1.6.1"
 				}
 			],
 			"options": {},
