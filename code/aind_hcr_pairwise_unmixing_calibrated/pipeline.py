@@ -137,9 +137,16 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
     given. Laser power is read per round from acquisition.json unless powers_by_round
     supplies it explicitly.
     """
+    import time as _time
+    _t_all = _time.time()
     asset_dir = Path(asset_dir)
     cxgs, seps, logs, summary = [], [], [], []
-    for round_key in rounds:
+    _n_rounds = len(rounds)
+    for _i_round, round_key in enumerate(rounds, start=1):
+        # A six-round mouse is tens of minutes of work. Announce each round so a long
+        # silence is distinguishable from a hang, and so the remaining time is legible.
+        print(f"\n=== round {_i_round}/{_n_rounds}: {round_key} "
+              f"({_time.time() - _t_all:.0f}s elapsed) ===", flush=True)
         pkl = asset_dir / f"{mouse_id}_{round_key}" / f"mixed_spots_{round_key}.pkl"
         spots = pd.read_pickle(pkl)
         acq_path, diag = round_inputs_from_asset(
@@ -174,8 +181,11 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
             outp = Path(output_dir)
             outp.mkdir(parents=True, exist_ok=True)
             res["spots"].to_parquet(
-                outp / f"{mouse_id}_{round_key}_unmixed_calibrated.parquet", index=False)
+                outp / f"{mouse_id}_{round_key}_unmixed_spots.parquet", index=False)
         del spots, res
+        print(f"  round {round_key} done ({_time.time() - _t_all:.0f}s elapsed)", flush=True)
+    print(f"\n=== all {_n_rounds} rounds unmixed in {(_time.time() - _t_all)/60:.1f} min; "
+          f"building cell x gene ===", flush=True)
     cxg_all = pd.concat(cxgs, ignore_index=True)
     table = cxg_all.pivot_table(index="cell_id", columns="round_chan_gene",
                                 values="spot_count", aggfunc="sum", fill_value=0)
@@ -185,10 +195,10 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
                   summary=pd.DataFrame(summary))
     if output_dir:
         outp = Path(output_dir)
-        table.to_csv(outp / f"{mouse_id}_cellxgene_calibrated.csv")
-        result["separability"].to_csv(outp / f"{mouse_id}_separability_calibrated.csv", index=False)
-        result["decisions"].to_csv(outp / f"{mouse_id}_decisions_calibrated.csv", index=False)
-        result["summary"].to_csv(outp / f"{mouse_id}_spot_change_calibrated.csv", index=False)
+        table.to_csv(outp / f"{mouse_id}_cellxgene.csv")
+        result["separability"].to_csv(outp / f"{mouse_id}_separability.csv", index=False)
+        result["decisions"].to_csv(outp / f"{mouse_id}_decisions.csv", index=False)
+        result["summary"].to_csv(outp / f"{mouse_id}_spot_change.csv", index=False)
         if write_anndata:
             try:
                 from . import annotate
@@ -240,10 +250,10 @@ def _write_asset_metadata(asset_dir, mouse_id, rounds, outp, processed_root,
         output_location=str(outp),
         parameters={"rounds": list(rounds), "mouse_id": mouse_id,
                     "processed_folder": processed_folder, **_jsonable(params)},
-        outputs={"cellxgene": f"{mouse_id}_cellxgene_calibrated.csv",
-                 "spots": [f"{mouse_id}_{r}_unmixed_calibrated.parquet" for r in rounds],
-                 "decisions": f"{mouse_id}_decisions_calibrated.csv",
-                 "spot_change": f"{mouse_id}_spot_change_calibrated.csv",
+        outputs={"cellxgene": f"{mouse_id}_cellxgene.csv",
+                 "spots": [f"{mouse_id}_{r}_unmixed_spots.parquet" for r in rounds],
+                 "decisions": f"{mouse_id}_decisions.csv",
+                 "spot_change": f"{mouse_id}_spot_change.csv",
                  "annotated_cellxgene": f"{mouse_id}_cellxgene_annotated.h5ad"},
         notes=(f"{int(summ.n_detected.sum()):,} spots in, "
                f"{int(summ.n_final.sum()):,} out across {len(rounds)} round(s). "

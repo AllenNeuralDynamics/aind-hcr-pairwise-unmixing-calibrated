@@ -32,6 +32,16 @@ def detection_index(df, channels=CHANS):
     return np.array([ci[str(c)] for c in df["chan"]], dtype=np.int8)
 
 
+def build_trees(det, zyx, channels=CHANS):
+    """One KD-tree per channel, in micron space. Build once per round and pass around.
+
+    Six separate call sites used to build these independently; on R5 (19.6M spots) a
+    full set costs ~7s, so the duplication was minutes per mouse for nothing.
+    """
+    pts = zyx * VOXEL_UM
+    return {j: cKDTree(pts[det == j]) for j in range(len(channels)) if (det == j).any()}
+
+
 def isolated_mask(det, zyx, k, channels=CHANS, iso_um=1.5, trees=None):
     """Spots detected in channel k with NO spot of any other channel within iso_um.
 
@@ -48,31 +58,58 @@ def isolated_mask(det, zyx, k, channels=CHANS, iso_um=1.5, trees=None):
     m = det == k
     if not m.any():
         return m
-    near_other = np.zeros(int(m.sum()), bool)
+    idx = np.where(m)[0]
     q = pts[m]
-    for j, tr in trees.items():
-        if j == k:
-            continue
-        d_, _ = tr.query(q, k=1)
-        near_other |= (d_ < iso_um)
+
+    # Two optimisations over the obvious "query every tree for every point, OR the
+    # results" loop, together ~5.6x faster on R5 Cck (38.1s -> 6.8s) with a
+    # bit-identical result:
+    #
+    #   * SHORT-CIRCUIT. A spot needs only ONE neighbour to be disqualified, so once
+    #     flagged it never has to be queried again. Most spots are near something (only
+    #     ~5% of Sst spots are isolated), so the surviving set shrinks fast.
+    #   * LARGEST TREE FIRST. Querying the densest channel first flags the most points,
+    #     making every subsequent query smaller.
+    #
+    # workers=-1 spreads each query over all cores; the result does not depend on it.
+    alive = np.arange(len(idx))
+    near_other = np.zeros(len(idx), bool)
+    for j in sorted((j for j in trees if j != k), key=lambda j: -trees[j].n):
+        if len(alive) == 0:
+            break
+        d_, _ = trees[j].query(q[alive], k=1, workers=-1)
+        hit = d_ < iso_um
+        near_other[alive[hit]] = True
+        alive = alive[~hit]
+
     out = np.zeros(len(det), bool)
-    out[np.where(m)[0]] = ~near_other
+    out[idx[~near_other]] = True
     return out
 
 
-def estimate_endmembers_isolated(I, det, zyx, channels=CHANS, iso_um=1.5, percentile=95):
+def estimate_endmembers_isolated(I, det, zyx, channels=CHANS, iso_um=1.5, percentile=95,
+                                 trees=None, iso_cache=None, progress=None):
     """Endmembers from the brightest tail of SPATIALLY ISOLATED spots.
 
     Validated on 800995 R5: this lands within 1 deg of the single-dye control's
     predicted Cck-Sst geometry (34.8 vs 35.6), where the self-peak pool gave 12.5 and
     partner-exclusion overshot to 43.7.
     """
-    pts = zyx * VOXEL_UM
-    trees = {j: cKDTree(pts[det == j]) for j in range(len(channels)) if (det == j).any()}
+    # trees and iso_cache are shared with measure_beta_and_tolerance: both need the
+    # same 5 KD-trees and the same 5 isolation masks, and recomputing them doubled the
+    # cost of the expensive part of a round.
+    if trees is None:
+        trees = build_trees(det, zyx, channels)
+    if iso_cache is None:
+        iso_cache = {}
     E = np.eye(len(channels))
     info = {}
     for k, c in enumerate(channels):
-        iso = isolated_mask(det, zyx, k, channels, iso_um, trees)
+        if progress:
+            progress(f"isolation mask {c}")
+        if k not in iso_cache:
+            iso_cache[k] = isolated_mask(det, zyx, k, channels, iso_um, trees)
+        iso = iso_cache[k]
         n_iso = int(iso.sum())
         info[c] = dict(n_detected=int((det == k).sum()), n_isolated=n_iso,
                        iso_frac=float(n_iso / max((det == k).sum(), 1)))
@@ -92,7 +129,8 @@ def estimate_endmembers_isolated(I, det, zyx, channels=CHANS, iso_um=1.5, percen
 
 
 def measure_beta_and_tolerance(I, det, zyx, channels=CHANS, iso_um=1.5,
-                               bright_pct=75, tol_pct=90, min_iso=2000):
+                               bright_pct=75, tol_pct=90, min_iso=2000,
+                               trees=None, iso_cache=None):
     """Per-direction beta AND its tolerance, both measured on a labelled set.
 
     Isolated source spots have a victim-channel reading that IS pure bleed, so:
@@ -109,11 +147,15 @@ def measure_beta_and_tolerance(I, det, zyx, channels=CHANS, iso_um=1.5,
     ten directions and is direction- and mouse-specific; 1.5 sits near p76 and so
     discards about a quarter of genuine bleed.
     """
-    pts = zyx * VOXEL_UM
-    trees = {j: cKDTree(pts[det == j]) for j in range(len(channels)) if (det == j).any()}
+    if trees is None:
+        trees = build_trees(det, zyx, channels)
+    if iso_cache is None:
+        iso_cache = {}
     out = {}
     for si, s in enumerate(channels):
-        iso = isolated_mask(det, zyx, si, channels, iso_um, trees)
+        if si not in iso_cache:
+            iso_cache[si] = isolated_mask(det, zyx, si, channels, iso_um, trees)
+        iso = iso_cache[si]
         if iso.sum() < min_iso:
             continue
         rows = np.where(iso)[0]
@@ -572,31 +614,52 @@ def unmix_v3(df, B_ctrl, powers, channels=CHANS, ctrl_min=0.05, margin=1.0,
              beta_disagree_tol=BETA_DISAGREE_TOL, dxy_tight=DXY_TIGHT,
              src_abund_ratio=SRC_ABUND_RATIO, use_empirical=USE_EMPIRICAL_DEFAULT,
              use_measured_beta=True, tol_pct=90, amb_bg_mult=1.0,
-             isolated_endmembers=True, fg_bg=None, bidirectional=True):
+             isolated_endmembers=True, fg_bg=None, bidirectional=True,
+             verbose=True):
     """Run v3 on one round.
 
     Returns (spots_out, sep_table, decision_log). `spots_out` carries every input
     spot with provenance columns; NOTHING is deleted from the frame - the
     `v3_action` column records what a downstream filter should do.
     """
+    import time as _time
+    _t0 = _time.time()
+    _N_STEPS = 7
+
+    def _step(i, msg):
+        """Progress line. A round takes minutes, so silence looks like a hang."""
+        if verbose:
+            print(f"    [{i}/{_N_STEPS}] {msg}  ({_time.time() - _t0:.0f}s)", flush=True)
+
     ci = {c: i for i, c in enumerate(channels)}
     I = intensity_matrix(df, channels)
     det = detection_index(df, channels)
     present = [c for c in channels if (det == ci[c]).any()]
     zyx = df[["z", "y", "x"]].to_numpy(np.float32)
     cell_id = df["cell_id"].to_numpy()
+    _step(1, f"loaded {len(df):,} spots, {len(present)} channels")
+
+    # ONE set of KD-trees and ONE isolation mask per channel, shared by the endmember
+    # estimator, the beta/tolerance measurement and the per-direction co-location.
+    trees = build_trees(det, zyx, channels)
+    iso_cache = {}
+    _step(2, "built spatial index")
 
     # Endmembers are estimated with partner-rich cells excluded (see
     # estimate_endmembers docstring) -- without this the endmember for an abundant
     # channel absorbs its neighbour's bleed and the pair looks collinear.
     if isolated_endmembers:
-        E, eminfo = estimate_endmembers_isolated(I, det, zyx, channels)
+        E, eminfo = estimate_endmembers_isolated(
+            I, det, zyx, channels, trees=trees, iso_cache=iso_cache,
+            progress=(lambda m: _step(3, f"dye lines: {m}")) if verbose else None)
     else:
         E, eminfo = estimate_endmembers(I, det, channels, require_selfpeak=require_selfpeak,
                                         cell_id=cell_id, B_ctrl=B_ctrl, ctrl_min=ctrl_min)
+    _step(3, "dye lines estimated from isolated spots")
     dirs = allowlist_directions(B_ctrl, present, channels, ctrl_min,
                                 bidirectional=bidirectional)
     sep = separability(I, det, E, dirs, channels)
+    _step(4, f"allowlist: {len(dirs)} directions to consider")
     B_pred = power_scaled_beta(B_ctrl, powers, channels)
 
     n = len(df)
@@ -609,13 +672,15 @@ def unmix_v3(df, B_ctrl, powers, channels=CHANS, ctrl_min=0.05, margin=1.0,
     coef_cross = np.full(n, np.nan, np.float32)
     is_ambiguous = np.zeros(n, bool)
     bg = np.array([np.percentile(I[:, k], 10) for k in range(len(channels))], np.float64)
-    meas = measure_beta_and_tolerance(I, det, zyx, channels, tol_pct=tol_pct) \
+    meas = measure_beta_and_tolerance(I, det, zyx, channels, tol_pct=tol_pct,
+                                      trees=trees, iso_cache=iso_cache) \
         if use_measured_beta else {}
     log = []
 
     # Directions the control matrix misses entirely (v2). These are real in-tissue
     # contamination with no control entry, so they can only be ADDED, never fixed by
     # magnitude correction. Their magnitude comes from the isolated-spot estimate.
+    _step(5, f"measured beta + tolerance for {len(meas)} directions")
     emp = empirical_allowlist(I, det, zyx, B_ctrl, channels, ctrl_min=ctrl_min) \
         if use_empirical else {}
     sep_rows = list(sep.iterrows())
@@ -626,7 +691,11 @@ def unmix_v3(df, B_ctrl, powers, channels=CHANS, ctrl_min=0.05, margin=1.0,
                 source=es, victim=ev, angle_deg=endmember_angle(E[:, ci[es]], E[:, ci[ev]]),
                 auc=np.nan, regime="delete_only", illcond=False, empirical=True))))
 
-    for _, row in sep_rows:
+    _n_dirs = len(sep_rows)
+    for _i_dir, (_, row) in enumerate(sep_rows, start=1):
+        if verbose:
+            print(f"    [6/{_N_STEPS}] direction {_i_dir}/{_n_dirs}: "
+                  f"{row.source}->{row.victim}  ({_time.time() - _t0:.0f}s)", flush=True)
         s, v, reg = row.source, row.victim, row.regime
         si, vi = ci[s], ci[v]
         is_emp = (s, v) in emp
@@ -754,6 +823,8 @@ def unmix_v3(df, B_ctrl, powers, channels=CHANS, ctrl_min=0.05, margin=1.0,
                         n_flagged=int(len(hd) + len(hr))))
 
     out = df.copy()
+    _step(7, f"decided: {int((action==1).sum()):,} delete, "
+             f"{int((action==2).sum()):,} reassign, {int((action==0).sum()):,} keep")
     out["v3_action"] = pd.Categorical.from_codes(action, ["keep", "delete", "reassign"])
     out["v3_ambiguous"] = is_ambiguous
     out["v3_chan"] = [channels[i] for i in assigned]

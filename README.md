@@ -345,6 +345,134 @@ what remains open. Start here if you want the reasoning rather than the API.
 [`docs/beta_explainer.png`](docs/beta_explainer.png) — the β figure from the section above,
 standalone.
 
+## Output files
+
+Written to `/root/capsule/results`. `<M>` is the mouse id, `<R>` the round key.
+
+| file | one row per | why it exists |
+|---|---|---|
+| `<M>_<R>_unmixed_spots.parquet` | spot (all of them) | **The primary output.** Every input spot survives, annotated with what the algorithm decided and why. Nothing is deleted — `v3_action` says what a downstream step should do. One file per round because a round is 2–25 M spots. |
+| `<M>_cellxgene.csv` | cell | Transcript counts, cells × `round-channel-gene`. Built from spots where `v3_action == "keep"`, joined across rounds on `cell_id`. |
+| `<M>_cellxgene_annotated.h5ad` | cell | The same matrix plus class / subclass / cluster labels and a depth-normalised layer. See below. |
+| `<M>_spot_change.csv` | round × channel | Audit summary: detections in, detections out, percent change. The first thing to read after a run — a channel losing 90% or gaining anything is a red flag. |
+| `<M>_decisions.csv` | round × direction | What happened on each bleed direction: which β was used and where it came from, the tolerance, how many spots were co-located, how many deleted, how many reassigned. This is the file to inspect when a gene's count moves and you want to know which direction did it. |
+| `<M>_separability.csv` | round × direction | **Why it exists:** the algorithm treats a channel pair differently depending on whether its two dye lines are geometrically distinguishable, and this file records that judgement so it is auditable rather than hidden. `angle_deg` is the angle between the two dye lines in 5-channel space; `auc` is how well the intensity ratio separates the two populations; `illcond` flags pairs under 25° where the least-squares test is dropped as uninformative; `regime` is the resulting policy (`delete_and_reassign` when the pair is cleanly separable, `delete_only` otherwise). **Use it to spot trouble before trusting a gene:** a pair with a small angle and an AUC near 0.5 is one where unmixing has the least to work with, so residual contamination there is expected rather than surprising. |
+| `processing.json`, `data_description.json`, and copied `subject.json` / `acquisition.json` / `procedures.json` / `instrument.json` | — | aind-data-schema metadata; see the section below. |
+
+### The spot table, column by column
+
+Identity and position carried through from the input: `spot_id`, `spot_uid`,
+`spot_uid_int`, `chan_spot_id`, `chan` (detection channel), `round`, `cell_id`,
+`z`/`y`/`x` (voxel indices; physical spacing is 1.0 × 0.24 × 0.24 µm z/y/x).
+
+Per-channel intensity: `chan_<C>_intensity` for each channel the round imaged —
+background-subtracted, which is what every decision uses.
+
+Upstream QC metrics, **annotated but never applied** (see the QC section):
+`dist`, `r`, `over_thresh`. Filter on these yourself if you want to.
+
+Raw brightness, present when `image_spot_detection/` was available:
+`fg`, `bg`, `fg_over_bg` — foreground, local background, and their ratio, for
+post-hoc intensity filtering at whatever threshold you choose.
+
+The decision columns:
+
+| column | meaning |
+|---|---|
+| `v3_action` | `keep`, `delete`, or `reassign`. **The only column a simple consumer needs.** |
+| `v3_chan` | the channel this spot is attributed to after unmixing — differs from `chan` only for `reassign` |
+| `v3_ambiguous` | `True` when the predicted bleed sat at or below the victim channel's noise floor, so the magnitude test had no dynamic range. These are **kept**, flagged rather than guessed |
+| `crosstalk_source_chan` | for a deleted spot, which channel's dye it came from |
+| `decision_rule` | which rule fired: `coloc_delete`, `coloc_delete_illcond`, `nnls_reassign_nopartner` |
+| `beta_used` | the bleed fraction applied to this spot |
+| `nnls_coef_own`, `nnls_coef_cross` | the two least-squares coefficients — own dye versus the source dye |
+
+To reproduce the delivered cell × gene table from the spots:
+
+```python
+import pandas as pd
+spots = pd.read_parquet("800995_R5_unmixed_spots.parquet")
+kept = spots[spots.v3_action == "keep"]
+counts = kept.groupby(["cell_id", "v3_chan"]).size().unstack(fill_value=0)
+```
+
+### The annotated `.h5ad`
+
+```python
+import anndata as ad
+adata = ad.read_h5ad("800995_cellxgene_annotated.h5ad")
+adata                       # e.g. 74,171 cells x 27 genes
+```
+
+**`adata.X`** — raw transcript counts, cells × genes. Integers.
+
+**`adata.layers["normalized"]`** — the same matrix after the two-stage transform used
+for clustering: each cell divided by its own total and rescaled to the median cell
+total, then each gene divided by its 95th percentile and clipped to 1. Cluster labels
+were computed on **this**, not on `X`, because per-cell detection depth spans two orders
+of magnitude and raw counts cluster on depth rather than identity.
+
+**`adata.var`** — one row per gene, with `round`, `channel`, `gene`. The index is
+`R5-561-Cck` style, so the same gene imaged in two rounds stays distinguishable.
+
+**`adata.obs`**
+
+| column | meaning |
+|---|---|
+| `class` | `excitatory` (Slc17a7⁺, R1) / `inhibitory` (Gad2⁺, R4) / `unassigned`. **Requires R1 and R4 in the run** — without them every cell is `unassigned` and no clusters are made |
+| `subclass` | `Pvalb` / `Sst` / `Vip` / `Lamp5` for inhibitory clusters, by which canonical marker is most *enriched* in the cluster (cluster mean ÷ across-cluster mean), not which is highest |
+| `cluster` | readable name, e.g. `Pvalb-2 (Mme/Calb1/Cck)` — subclass, index within subclass, then the top differentially expressed genes. Subclass genes are excluded from the marker list, since the subclass is already the prefix |
+| `cluster_id` | integer label; `-1` for cells that were not clustered (unassigned class) |
+| `total_counts`, `n_genes` | per-cell depth and the number of genes detected |
+| `<marker>_counts` | the raw counts of each class marker, so the gate is auditable |
+
+**`adata.uns["unmixing"]`** — a nested record of how the labels were made:
+`classification` (which markers were available, the count threshold, how many cells were
+double-positive or neither), `clustering` (method, seed, per-class cluster count and the
+name/subclass/enrichment of each), `normalization`, and `mouse_id` / `rounds`.
+
+Clustering is computed **fresh from this matrix** — no external reference or
+pre-existing labels are used, so cluster identity is not comparable across mice or
+across runs unless you fit once and apply.
+
+A quick look, per cell, inhibitory only:
+
+```python
+import numpy as np, matplotlib.pyplot as plt
+
+inh = adata[adata.obs["class"] == "inhibitory"]
+inh = inh[inh.obs.sort_values(["cluster_id", "total_counts"]).index]   # group by cluster
+M = inh.layers["normalized"]
+M = M.toarray() if hasattr(M, "toarray") else M
+
+fig, ax = plt.subplots(figsize=(7, 10))
+im = ax.imshow(M, aspect="auto", cmap="Greys", vmin=0, vmax=1, interpolation="nearest")
+ax.set_xticks(range(inh.n_vars))
+ax.set_xticklabels(inh.var["gene"], rotation=90, fontsize=7)
+# one tick per cluster, at its midpoint
+ids = inh.obs["cluster_id"].to_numpy()
+bounds = np.flatnonzero(np.diff(ids)) + 1
+mids = np.convolve(np.r_[0, bounds, len(ids)], [.5, .5], "valid")
+ax.set_yticks(mids)
+ax.set_yticklabels(inh.obs["cluster"].to_numpy()[mids.astype(int)], fontsize=7)
+for b in bounds:
+    ax.axhline(b, color="firebrick", lw=0.4)
+ax.set_ylabel(f"{inh.n_obs:,} inhibitory cells, grouped by cluster")
+fig.colorbar(im, ax=ax, label="expression (fraction of gene's 95th pct)")
+fig.savefig("cellxgene.png", dpi=200, bbox_inches="tight")
+```
+
+For the lab's standard version of this figure — cluster naming, ordering, and axis
+conventions applied automatically — load the `standard-cellxgene-plot-formatting` skill
+instead of hand-rolling it.
+
+### Runtime
+
+A six-round mouse is roughly 8–12 min of unmixing on a `gr6.4xlarge`, plus download
+time. Each round prints a 7-step progress line (`[3/7] dye lines ...`) and each
+direction within step 6 is announced, so a long silence means a problem rather than
+patience.
+
 ## Metadata (aind-data-schema)
 
 The results directory is written as a proper derived asset, not a bare folder of CSVs:
