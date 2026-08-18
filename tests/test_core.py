@@ -322,7 +322,66 @@ def test_double_positive_is_unassigned():
     t.iloc[0, t.columns.get_loc("R1-561-Slc17a7")] = 500     # both markers high
     cls, info = A.assign_class(t)
     assert cls.iloc[0] == "unassigned"
-    assert info["n_double_positive"] == 1
+    # key renamed when the rule widened to any interneuron marker; the guarantee is the
+    # same -- Gad2 AND Slc17a7 together is refused rather than guessed
+    assert info["n_ambiguous_gad2_and_slc17a7"] == 1
+
+
+def test_any_interneuron_marker_calls_inhibitory():
+    """Pvalb/Vip/Sst alone are enough, without Gad2.
+
+    Gad2 alone under-calls: on 800995 it labelled 3,401 cells inhibitory where the
+    four-marker rule finds 7,035. A cell strongly expressing a canonical interneuron
+    marker is inhibitory whether or not its Gad2 reading cleared the bar.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table(n_inh=4, n_exc=4)
+    gad = t.columns[t.columns.str.endswith("Gad2")][0]
+    t[gad] = 0                                    # nothing clears Gad2
+    # GFP is in the gate too: in this preparation it is an interneuron reporter, and it
+    # is the single largest contributor (on 800995: 11,835 positive cells vs Gad2's 6,851)
+    tested = 0
+    for gene in A.INHIBITORY_MARKERS:
+        if gene == "Gad2":
+            continue                              # held at 0 above, on purpose
+        hits = t.columns[t.columns.str.endswith(gene)]
+        if not len(hits):
+            continue                              # gene absent from this fixture's panel
+        col = hits[0]
+        t.loc[t.index[0], col] = 500
+        cls, info = A.assign_class(t)
+        assert cls.iloc[0] == "inhibitory", f"{gene} alone should call inhibitory"
+        t.loc[t.index[0], col] = 0
+        tested += 1
+    assert tested >= 3, f"expected to exercise >=3 markers, got {tested}"
+
+    # and the threshold is honoured: just under it is not a call
+    col = t.columns[t.columns.str.endswith("Pvalb")][0]
+    t.loc[t.index[0], col] = A.MIN_CLASS_COUNTS - 1
+    cls, _ = A.assign_class(t)
+    assert cls.iloc[0] != "inhibitory"
+
+
+def test_marker_names_exclude_round6_and_gate_genes():
+    """Round-6 genes, the class gates and GFP never appear in a cluster name."""
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    genes = list(A.ROUND6_GENES) + list(A.GATE_GENES) + ["Mme", "Pthlh"]
+    means = pd.DataFrame([[10.0] * len(genes), [1.0] * len(genes)], columns=genes)
+    means.loc[0, "Sncg"] = 500      # would dominate enrichment if not barred
+    means.loc[0, "Gad2"] = 500
+    names = A.cluster_marker_names(means, {0: "Pvalb", 1: "Pvalb"})
+    for banned in A.ROUND6_GENES + A.GATE_GENES:
+        assert banned not in names[0], f"{banned} leaked into {names[0]}"
+
+
+def test_round_channel_order_is_acquisition_order():
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    cols = ["R5-638-Vip", "R1-488-GFP", "R2-514-Hpse", "R1-561-Slc17a7", "R10-488-X"]
+    assert A.round_channel_order(cols) == [
+        "R1-488-GFP", "R1-561-Slc17a7", "R2-514-Hpse", "R5-638-Vip", "R10-488-X"]
 
 
 def test_normalization_is_reversible_in_shape_and_bounded():

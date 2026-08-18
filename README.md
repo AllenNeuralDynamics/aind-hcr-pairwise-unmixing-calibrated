@@ -419,7 +419,7 @@ of magnitude and raw counts cluster on depth rather than identity.
 
 | column | meaning |
 |---|---|
-| `class` | `excitatory` (Slc17a7⁺, R1) / `inhibitory` (Gad2⁺, R4) / `unassigned`. **Requires R1 and R4 in the run** — without them every cell is `unassigned` and no clusters are made |
+| `class` | `inhibitory` if ANY of Gad2, Pvalb, Vip, Sst, GFP is ≥ `MIN_CLASS_COUNTS` (100); `excitatory` if Slc17a7 clears it and no inhibitory marker does; else `unassigned`. Gad2 alone under-calls badly — on 800995 it labels 3,401 cells where the five-marker rule finds 11,337, and GFP (an interneuron reporter here) is the largest single contributor at 11,835 positive cells. A cell clearing BOTH Gad2 and Slc17a7 stays `unassigned` rather than being guessed: that pattern is usually two merged cells or residual contamination |
 | `subclass` | `Pvalb` / `Sst` / `Vip` / `Lamp5` for inhibitory clusters, by which canonical marker is most *enriched* in the cluster (cluster mean ÷ across-cluster mean), not which is highest |
 | `cluster` | readable name, e.g. `Pvalb-2 (Mme/Calb1/Cck)` — subclass, index within subclass, then the top differentially expressed genes. Subclass genes are excluded from the marker list, since the subclass is already the prefix |
 | `cluster_id` | integer label; `-1` for cells that were not clustered (unassigned class) |
@@ -496,9 +496,18 @@ fig, summary, info = cellxgene_heatmap(
     outfile="inhibitory.png")
 ```
 
-![All cells](docs/example_all_cells.png)
+Both figures show raw transcript counts beside the normalised matrix, and each comes
+in two gene orders — the biology-grouped standard order, and acquisition
+(`round_channel_order`, `R1-488-GFP … R6-638-Htr3a`) which makes round- and
+channel-level artefacts visible as vertical bands:
 
-![Inhibitory only](docs/example_inhibitory.png)
+![All cells, standard gene order](docs/cellxgene_all_std.png)
+
+![All cells, round x channel order](docs/cellxgene_all_rc.png)
+
+![Inhibitory, standard gene order](docs/cellxgene_inhibitory_std.png)
+
+![Inhibitory, round x channel order](docs/cellxgene_inhibitory_rc.png)
 
 `summary` is the per-cluster table (group, subclass, `Subclass(markers)` name, cell
 count); `info` reports which clusters were dropped as empty. Both examples were run

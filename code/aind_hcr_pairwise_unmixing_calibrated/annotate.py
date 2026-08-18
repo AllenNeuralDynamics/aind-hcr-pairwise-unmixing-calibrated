@@ -36,12 +36,35 @@ import pandas as pd
 #: Positive markers for the two classes, and the round each is imaged in.
 CLASS_MARKERS = {"excitatory": "Slc17a7", "inhibitory": "Gad2"}
 
+#: Any of these above MIN_CLASS_COUNTS makes a cell inhibitory. Gad2 alone is too
+#: strict a gate: it under-calls badly (on 800995, 11,334 cells clear Gad2 but a third
+#: of them also clear Slc17a7, and Gad2 itself is only moderately expressed in some
+#: interneuron types). A cell strongly expressing any canonical interneuron marker is
+#: inhibitory whether or not its Gad2 reading cleared the threshold.
+#:
+#: GFP is included because in this preparation it is an interneuron reporter, so a
+#: GFP-high cell is inhibitory evidence like any other marker here. That makes GFP a
+#: GATE rather than a measurement, which is why GATE_GENES also bars it from cluster
+#: names -- naming a cluster after the reporter that selected it is circular.
+INHIBITORY_MARKERS = ("Gad2", "Pvalb", "Vip", "Sst", "GFP")
+
+#: Genes barred from cluster marker names on top of the subclass genes. Round 6
+#: (Sncg, Adra1b, Cnr1, Adra1a, Htr3a) is excluded by request: those genes are broadly
+#: expressed across types here and crowd out the markers that actually distinguish a
+#: cluster. They still participate in clustering and in the plotted matrix.
+ROUND6_GENES = ("Sncg", "Adra1b", "Cnr1", "Adra1a", "Htr3a")
+
+#: Also barred from marker names: the class gates and the reporter. Gad2 and Slc17a7
+#: are what DEFINE the class, so naming an inhibitory cluster after Gad2 is circular,
+#: and "Lamp5-1 (Slc17a7/...)" reads as a contradiction. GFP is a reporter, not biology.
+GATE_GENES = ("Gad2", "Slc17a7", "GFP")
+
 #: Canonical inhibitory subclasses, in the order clusters are grouped.
 SUBCLASS_GENES = ("Pvalb", "Sst", "Vip", "Lamp5")
 
 DEPTH_SCALE = "median"      # per-cell depth target: "median" or "mean" cell total
 GENE_PERCENTILE = 95        # per-gene scale: divide by this percentile, clip to 1
-MIN_CLASS_COUNTS = 50       # transcripts of a class marker to call that class
+MIN_CLASS_COUNTS = 100      # transcripts of a class marker to call that class
 N_CLUSTERS_INH = 20
 N_CLUSTERS_EXC = 12
 RANDOM_SEED = 0
@@ -99,32 +122,57 @@ def normalize_cellxgene(table, depth_scale=DEPTH_SCALE,
     return pd.DataFrame(scaled, index=table.index, columns=table.columns), info
 
 
-def assign_class(table, min_counts=MIN_CLASS_COUNTS, markers=CLASS_MARKERS):
-    """class per cell from positive markers only.
+def assign_class(table, min_counts=MIN_CLASS_COUNTS, markers=CLASS_MARKERS,
+                 inhibitory_markers=INHIBITORY_MARKERS):
+    """class per cell, from positive markers only.
 
-    A cell positive for exactly one class marker gets that class. Positive for both,
-    or neither, gets "unassigned" -- those are the cells worth looking at, and forcing
-    them into a class would hide them. When the excitatory marker is missing from the
-    panel every non-inhibitory cell is "unassigned" (see module docstring).
+    INHIBITORY: any of `inhibitory_markers` (Gad2, Pvalb, Vip, Sst) at or above
+    `min_counts`. Gad2 alone under-calls -- it is only moderately expressed in some
+    interneuron types -- so a cell strongly expressing any canonical interneuron marker
+    counts, whether or not its Gad2 reading cleared the bar.
+
+    EXCITATORY: Slc17a7 at or above `min_counts`, and no inhibitory marker.
+
+    UNASSIGNED: everything else. That is two distinct situations, both worth keeping
+    visible rather than forced into a class:
+      * genuinely ambiguous -- Gad2 AND Slc17a7 both above threshold. A double-positive
+        cell is usually a segmentation artefact (two cells merged) or residual
+        contamination, and calling it either way propagates that error.
+      * below threshold on everything, so there is no evidence either way.
+    A cell positive for an interneuron marker AND Slc17a7 but NOT Gad2 is called
+    inhibitory: without Gad2 corroboration the Slc17a7 is the more likely stray signal.
     """
-    cols = {cls: gene_column(table, g) for cls, g in markers.items()}
     n = len(table)
     out = pd.Series(["unassigned"] * n, index=table.index, dtype=object)
 
-    pos = {}
-    for cls, col in cols.items():
-        pos[cls] = (table[col].to_numpy() >= min_counts if col is not None
-                    else np.zeros(n, bool))
+    exc_col = gene_column(table, markers["excitatory"])
+    gad_col = gene_column(table, markers["inhibitory"])
+    inh_cols = {g: gene_column(table, g) for g in inhibitory_markers}
 
-    only_inh = pos["inhibitory"] & ~pos["excitatory"]
-    only_exc = pos["excitatory"] & ~pos["inhibitory"]
-    out[only_inh] = "inhibitory"
-    out[only_exc] = "excitatory"
-    # both-positive stays "unassigned"; so does neither-positive
-    info = dict(markers_available={c: (cols[c] or "none") for c in cols},
+    pos_exc = (table[exc_col].to_numpy() >= min_counts if exc_col is not None
+               else np.zeros(n, bool))
+    pos_gad = (table[gad_col].to_numpy() >= min_counts if gad_col is not None
+               else np.zeros(n, bool))
+    per_marker, pos_inh = {}, np.zeros(n, bool)
+    for g, col in inh_cols.items():
+        hit = (table[col].to_numpy() >= min_counts if col is not None
+               else np.zeros(n, bool))
+        per_marker[g] = int(hit.sum())
+        pos_inh |= hit
+
+    ambiguous = pos_gad & pos_exc          # both class markers -> refuse to call
+    out[pos_inh & ~ambiguous] = "inhibitory"
+    out[pos_exc & ~pos_inh] = "excitatory"
+
+    info = dict(markers_available={"excitatory": (exc_col or "none"),
+                                   "inhibitory": (gad_col or "none")},
+                inhibitory_markers={g: (c or "none") for g, c in inh_cols.items()},
+                n_positive_per_inhibitory_marker=per_marker,
                 min_counts=min_counts,
-                n_double_positive=int((pos["inhibitory"] & pos["excitatory"]).sum()),
-                n_neither=int((~pos["inhibitory"] & ~pos["excitatory"]).sum()))
+                n_inhibitory=int((out == "inhibitory").sum()),
+                n_excitatory=int((out == "excitatory").sum()),
+                n_ambiguous_gad2_and_slc17a7=int(ambiguous.sum()),
+                n_below_threshold_on_all=int((~pos_inh & ~pos_exc).sum()))
     return out, info
 
 
@@ -135,7 +183,8 @@ def _kmeans(matrix, k, seed=RANDOM_SEED):
 
 
 def cluster_marker_names(cluster_means, prefix_by_cluster, n_markers=3,
-                         min_enrichment=1.25, exclude_genes=SUBCLASS_GENES):
+                         min_enrichment=1.25,
+                         exclude_genes=SUBCLASS_GENES + ROUND6_GENES + GATE_GENES):
     """Name each cluster `<prefix>-<n> (GeneA/GeneB/GeneC)`.
 
     Markers are the genes most ENRICHED in the cluster -- cluster mean divided by the
@@ -252,6 +301,21 @@ def cluster_by_class(normalized, classes, n_inh=N_CLUSTERS_INH, n_exc=N_CLUSTERS
         offset += k
 
     return labels, cluster_id, subclass, info
+
+
+def round_channel_order(columns):
+    """Column order by round then channel: R1-488, R1-561, R2-488, ... R6-638.
+
+    The acquisition order. Useful as an alternative to the biology-grouped standard
+    gene order because it makes round- and channel-level artefacts visible as vertical
+    bands -- a whole round reading high, or one channel across rounds.
+    """
+    def key(c):
+        parts = str(c).split("-")
+        rnd = int("".join(ch for ch in parts[0] if ch.isdigit()) or 0)
+        chan = int(parts[1]) if len(parts) > 2 and parts[1].isdigit() else 0
+        return (rnd, chan)
+    return sorted(columns, key=key)
 
 
 def build_anndata(table, min_class_counts=MIN_CLASS_COUNTS, n_inh=N_CLUSTERS_INH,
