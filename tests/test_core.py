@@ -500,7 +500,7 @@ def test_every_import_is_declared_in_the_environment():
     declared = {p["name"] for p in env["installers"]["pip"]["packages"]}
 
     imported = set()
-    for path in list((root / "src").rglob("*.py")) + list((root / "code").glob("*.py")):
+    for path in list((root / "code").rglob("*.py")) :
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Import):
                 imported |= {a.name.split(".")[0] for a in node.names}
@@ -536,3 +536,39 @@ def test_dockerfile_hash_header_matches_body():
     first, body = raw.split("\n", 1)
     assert first.startswith("# hash:sha256:"), first
     assert first.split(":")[-1] == hashlib.sha256(body.encode()).hexdigest()
+
+
+def test_entry_point_imports_with_only_the_code_folder_present(tmp_path):
+    """Code Ocean mounts ONLY the capsule's code folder, at /code.
+
+    So run_capsule.py executes as /code/run_capsule.py with no parent repository
+    around it: no sibling src/, no pyproject.toml, nothing installed. An earlier layout
+    kept the package in a top-level src/ and reached it with parent.parent/"src", which
+    resolves to /src under the capsule and raised ModuleNotFoundError on the first real
+    run -- while passing every local test, because a git checkout does have that
+    sibling.
+
+    This copies code/ alone into an isolated directory and imports the entry point with
+    the package uninstalled, which is what the capsule actually does.
+    """
+    import shutil
+    import subprocess
+    import sys
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    isolated = tmp_path / "code"
+    shutil.copytree(root / "code", isolated,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+    # PYTHONPATH cleared and cwd set to the copy: the only way the import can succeed
+    # is the shim in run_capsule.py finding the package beside it.
+    env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(tmp_path)}
+    probe = (
+        "import runpy, sys; sys.argv=['run_capsule.py','--help']; "
+        "runpy.run_path('run_capsule.py', run_name='__main__')"
+    )
+    r = subprocess.run([sys.executable, "-c", probe], cwd=isolated,
+                       env=env, capture_output=True, text=True)
+    # --help exits 0 after argparse prints usage; a missing package exits 1 on traceback
+    assert "ModuleNotFoundError" not in r.stderr, r.stderr[-800:]
+    assert "--mouse-id" in r.stdout, (r.stdout[-400:], r.stderr[-400:])

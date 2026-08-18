@@ -27,14 +27,20 @@ from pathlib import Path
 
 import pandas as pd
 
-# The package source lives in the capsule at ../src (i.e. /root/capsule/src), which is
-# mounted at run time. Adding it to sys.path rather than pip-installing at image build
-# means a code edit takes effect on the next run without an environment rebuild. When
-# the package IS installed (local dev, `pip install -e .`), the installed copy is found
-# first and this is a no-op.
-_SRC = Path(__file__).resolve().parent.parent / "src"
-if _SRC.is_dir() and str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
+# The package lives NEXT TO this file, inside code/. That is deliberate: Code Ocean
+# mounts only the capsule's code folder, at /code, so this script runs as
+# /code/run_capsule.py and a sibling src/ directory does not exist there. An earlier
+# layout kept the package in a top-level src/ and reached it with parent.parent/"src",
+# which resolved to /src and failed with ModuleNotFoundError at run time while working
+# fine in a git checkout.
+#
+# Keeping the source in the capsule (rather than pip-installing it into the image)
+# means a code edit takes effect on the next run with no environment rebuild. When the
+# package IS installed (local dev, `pip install -e .`), the installed copy wins and
+# this is a no-op.
+_PKG_PARENT = Path(__file__).resolve().parent
+if str(_PKG_PARENT) not in sys.path:
+    sys.path.insert(0, str(_PKG_PARENT))
 
 from aind_hcr_pairwise_unmixing_calibrated import pipeline
 from aind_hcr_pairwise_unmixing_calibrated.control import CHANS
