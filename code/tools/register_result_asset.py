@@ -154,6 +154,14 @@ def get_computation(computation_id, token, domain):
     id alone carries none of those, and a dict holding only {"id": ...} passes every check
     vacuously. Naming a computation by hand must not be a way around the safety gate.
     """
+    if not _is_full_id(computation_id):
+        # Reached only when a prefix could not be resolved. The API's own answer here is
+        # `400 invalid id`, which does not say that the id was the wrong SHAPE.
+        raise SystemExit(
+            f"'{computation_id}' is not a full computation id.\n"
+            "Code Ocean wants the 36-character UUID, e.g.\n"
+            "  a68a73ce-0000-0000-0000-000000000000\n"
+            "`--list` prints ids in full; copy one from there.")
     r = _api(f"computations/{computation_id}", token, domain)
     if isinstance(r, list):
         r = r[0] if r else {}
@@ -262,6 +270,45 @@ def inspect(comp, token, domain):
     return "ready", man["name"], man
 
 
+def _is_full_id(cid):
+    """A Code Ocean computation id is a 36-character UUID (8-4-4-4-12).
+
+    Worth checking rather than passing anything through: the API rejects a short id with
+    `400 invalid id`, which says nothing about what the id should have looked like.
+    """
+    parts = cid.split("-")
+    return len(cid) == 36 and [len(p) for p in parts] == [8, 4, 4, 4, 12]
+
+
+def _resolve_prefix(prefix, capsule_id, token, domain):
+    """Expand a computation-id prefix to the full id, or exit explaining why it cannot.
+
+    `--list` used to print ids truncated to 8 characters, so the obvious thing -- copy an
+    id from the listing and pass it back -- produced `400 invalid id`. Listings now print
+    the full id, and a prefix is resolved here so an id copied from an older run still
+    works. Requires a capsule to search; ambiguity is an error rather than a guess.
+    """
+    if not capsule_id:
+        raise SystemExit(
+            f"'{prefix}' is not a full computation id (expected a 36-character UUID).\n"
+            "To resolve a prefix I need the capsule: pass --capsule or set "
+            + " or ".join("$" + v for v in CAPSULE_VARS) + ",\n"
+            "or pass the full id -- `--list` prints them in full.")
+    comps = list_computations(capsule_id, token, domain)
+    hits = [c for c in comps if str(c.get("id", "")).startswith(prefix)]
+    if len(hits) == 1:
+        print(f"resolved {prefix} -> {hits[0]['id']}", flush=True)
+        return hits[0]["id"]
+    if not hits:
+        raise SystemExit(
+            f"no computation on this capsule starts with '{prefix}'.\n"
+            f"{len(comps)} computation(s) found; run --list to see them with full ids.")
+    raise SystemExit(
+        f"'{prefix}' matches {len(hits)} computations:\n"
+        + "\n".join(f"  {c['id']}  {_when(c)} UTC" for c in hits)
+        + "\nPass the full id.")
+
+
 def _when(comp):
     ts = comp.get("created")
     if not ts:
@@ -273,12 +320,12 @@ def _when(comp):
 
 
 def cmd_list(comps, token, domain):
-    print(f"{'computation':10s}  {'run (UTC)':16s}  {'status':11s} detail")
+    print(f"{'computation':36s}  {'run (UTC)':16s}  {'status':11s} detail")
     n_ready = 0
     for c in sorted(comps, key=lambda z: z.get("created", 0), reverse=True):
         status, detail, _ = inspect(c, token, domain)
         n_ready += status == "ready"
-        print(f"{c['id'][:8]:10s}  {_when(c):16s}  {status:11s} {detail}")
+        print(f"{c['id']:36s}  {_when(c):16s}  {status:11s} {detail}")
     print(f"\n{n_ready} run(s) ready to register.")
     return 0
 
@@ -302,10 +349,10 @@ def cmd_register(comps, token, domain, dry_run=False, only_latest=False):
         elif status == "registered" and only_latest:
             # Stop rather than walking back: the newest run is accounted for, and an older
             # one is not what --latest was asked to do.
-            print(f"{c['id'][:8]}  already registered as {detail}")
+            print(f"{c['id']}  already registered as {detail}")
             return 0
         else:
-            print(f"{c['id'][:8]}  skipped      {detail}")
+            print(f"{c['id']}  skipped      {detail}")
     if not todo:
         print("nothing to register.")
         return 0
@@ -369,7 +416,10 @@ def main(argv=None):
     def fetch():
         if args.computation_id:
             # The full record, not just the id: gate() has nothing to check otherwise.
-            return [get_computation(args.computation_id, token, domain)]
+            cid = args.computation_id
+            if not _is_full_id(cid):
+                cid = _resolve_prefix(cid, args.capsule, token, domain)
+            return [get_computation(cid, token, domain)]
         return list_computations(args.capsule, token, domain)
 
     if args.list:

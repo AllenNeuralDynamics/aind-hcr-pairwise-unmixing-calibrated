@@ -717,6 +717,82 @@ def test_every_import_is_declared_in_the_environment():
         f"declared: {sorted(declared)}")
 
 
+def test_a_listed_id_can_be_pasted_straight_back_in():
+    """Whatever --list prints must be a usable argument.
+
+    Reported: `register_result_asset.py a68a73ce --dry-run` failed with
+    `400 "invalid id"`. The listing printed ids truncated to 8 characters, so the obvious
+    move -- copy an id out of --list and pass it back -- could not work. A tool that
+    displays an identifier in a form its own next command rejects is broken regardless of
+    what the API says.
+
+    Two halves: listings print the full id, and a prefix is resolved rather than sent.
+    """
+    import importlib.util
+
+    here = pathlib.Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_rra_id", here / "code" / "tools" / "register_result_asset.py")
+    rra = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rra)
+
+    src = (here / "code" / "tools" / "register_result_asset.py").read_text()
+    assert "c['id'][:8]" not in src, "listings must print the FULL computation id"
+
+    full = "a68a73ce-1111-2222-3333-444444444444"
+    assert rra._is_full_id(full)
+    assert not rra._is_full_id("a68a73ce")
+    assert not rra._is_full_id(full[:-1])          # 35 chars
+    assert not rra._is_full_id("a68a73ce11112222-3333-444444444444")  # wrong grouping
+
+    comps = [{"id": full, "created": 0},
+             {"id": "b0000000-1111-2222-3333-444444444444", "created": 0}]
+    monkey = lambda *a, **k: comps
+    rra.list_computations = monkey
+
+    # a unique prefix resolves
+    assert rra._resolve_prefix("a68a73ce", "cap", "tok", "dom") == full
+
+    # an unknown prefix is an error naming what to do, not a silent miss
+    with pytest.raises(SystemExit) as e:
+        rra._resolve_prefix("zzzzzzzz", "cap", "tok", "dom")
+    assert "--list" in str(e.value)
+
+    # an ambiguous prefix refuses rather than guessing
+    comps.append({"id": "a68a73ce-9999-2222-3333-444444444444", "created": 0})
+    with pytest.raises(SystemExit) as e:
+        rra._resolve_prefix("a68a73ce", "cap", "tok", "dom")
+    assert "matches 2" in str(e.value)
+
+    # without a capsule there is nothing to search, and the message says so
+    with pytest.raises(SystemExit) as e:
+        rra._resolve_prefix("a68a73ce", None, "tok", "dom")
+    assert "--capsule" in str(e.value)
+
+
+def test_a_short_id_never_reaches_the_api():
+    """get_computation must reject a wrong-shaped id itself.
+
+    The API answers `400 invalid id`, which does not tell the operator that the id was the
+    wrong LENGTH -- that is the message that sent this in the wrong direction once already.
+    """
+    import importlib.util
+
+    here = pathlib.Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_rra_short", here / "code" / "tools" / "register_result_asset.py")
+    rra = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rra)
+
+    called = []
+    rra._api = lambda *a, **k: called.append(a) or {}
+
+    with pytest.raises(SystemExit) as e:
+        rra.get_computation("a68a73ce", "tok", "dom")
+    assert "36-character" in str(e.value)
+    assert not called, "a short id must not be sent to the API"
+
+
 def test_credentials_come_from_an_attached_secret_or_an_explicit_export():
     """A token attached as a Code Ocean SECRET must work without any export.
 
@@ -1228,14 +1304,19 @@ def test_manual_mode_does_not_bypass_the_gate():
 
     fetched = {}
 
+    # A full UUID, not the 8-char short form: get_computation now rejects a wrong-shaped
+    # id before it reaches the API, so a short stand-in would exercise that guard instead
+    # of the gate this test is about.
+    cid = "d20036dc-1111-2222-3333-444444444444"
+
     def fake_api(path, token, domain, method="GET", body=None, params=None, soft=False):
         fetched["path"] = path
-        return {"id": "d20036dc", "state": "completed", "end_status": "succeeded",
+        return {"id": cid, "state": "completed", "end_status": "succeeded",
                 "exit_code": 1, "has_results": False}
 
     rra._api = fake_api
-    comp = rra.get_computation("d20036dc", "t", "d")
-    assert fetched["path"] == "computations/d20036dc"
+    comp = rra.get_computation(cid, "t", "d")
+    assert fetched["path"] == f"computations/{cid}"
     assert "exit_code=1" in rra.gate(comp), "the fetched record must be gated"
 
 
