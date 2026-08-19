@@ -755,6 +755,11 @@ loop:
 python tools/register_result_asset.py --watch --interval 600     # every 10 min
 ```
 
+Both `end_status` and `exit_code` are checked because neither is sufficient alone: a run
+stopped part-way can carry `exit_code=0` with `end_status="failed"`, and a script that ran
+to completion and reported failure carries `end_status="succeeded"` with a non-zero
+`exit_code`.
+
 **Why a repeated sweep is safe.** The manifest name embeds the run's own UTC timestamp, so
 it is unique per run and doubles as the idempotency key: before creating anything, the
 script searches Code Ocean for an asset of that name and skips the run if one exists. A
@@ -765,7 +770,8 @@ exactly one asset per successful run.
 
 | condition | behaviour |
 |---|---|
-| `exit_code != 0` | skipped — a failed run must not become an asset |
+| `end_status != "succeeded"` | skipped — a failed or stopped run must not become an asset |
+| `exit_code != 0` | skipped — same reason; both fields are checked because neither alone is sufficient |
 | `has_results` false | skipped — nothing to capture |
 | no `asset_manifest.json` | skipped — run predates this feature, or used `--no-metadata` |
 | an asset with that name exists | skipped — already registered |

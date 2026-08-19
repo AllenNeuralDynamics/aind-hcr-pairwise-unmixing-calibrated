@@ -33,6 +33,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
@@ -43,9 +44,11 @@ MANIFEST_NAME = "asset_manifest.json"
 # --------------------------------------------------------------------------- API
 
 
-def _api(path, token, domain, method="GET", body=None, soft=False):
+def _api(path, token, domain, method="GET", body=None, params=None, soft=False):
     """Call the Code Ocean v1 API. soft=True returns None on 4xx instead of exiting."""
     url = f"{domain.rstrip('/')}/api/v1/{path.lstrip('/')}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
                                  headers={"Content-Type": "application/json"})
@@ -91,10 +94,15 @@ def list_computations(capsule_id, token, domain):
 
 
 def read_manifest(computation_id, token, domain):
-    """results/asset_manifest.json from a finished computation, or None."""
-    urls = _api(f"computations/{computation_id}/results/download_url", token, domain,
-                method="POST", body={"path": MANIFEST_NAME}, soft=True)
-    url = (urls or {}).get("url") or (urls or {}).get("download_url")
+    """results/asset_manifest.json from a finished computation, or None.
+
+    GET computations/<id>/results/urls?path=... , which is what the official client
+    (codeocean 0.16.0, Computations.get_result_file_urls) calls. The older
+    results/download_url route is deprecated there.
+    """
+    urls = _api(f"computations/{computation_id}/results/urls", token, domain,
+                params={"path": MANIFEST_NAME}, soft=True)
+    url = (urls or {}).get("download_url") or (urls or {}).get("url")
     if not url:
         return None
     try:
@@ -128,7 +136,7 @@ def create_asset(computation_id, manifest, token, domain):
 # ----------------------------------------------------------------------- gating
 
 
-SKIP_FAILED = "run failed (exit_code={code}) -- a failed run must not become an asset"
+SKIP_FAILED = "run did not succeed ({why}) -- a failed run must not become an asset"
 SKIP_NO_RESULTS = "no results to capture"
 SKIP_NOT_DONE = "state={state}, not finished"
 SKIP_NO_MANIFEST = (f"no {MANIFEST_NAME} in results -- run predates this feature, "
@@ -136,11 +144,22 @@ SKIP_NO_MANIFEST = (f"no {MANIFEST_NAME} in results -- run predates this feature
 
 
 def gate(comp):
-    """Cheap checks from the computation record alone. Returns None when it may proceed."""
+    """Cheap checks from the computation record alone. Returns None when it may proceed.
+
+    Both end_status and exit_code are checked, because neither alone is sufficient: on
+    this capsule, computation f8ca3896 carries exit_code=0 with end_status="failed"
+    (the run was stopped before the script's own exit status meant anything), while
+    d20036dc carries end_status="succeeded" with exit_code=1 (the script ran to
+    completion and reported failure). Trusting either field by itself lets one of those
+    two become an asset.
+    """
     if comp.get("state") not in (None, "completed"):
         return SKIP_NOT_DONE.format(state=comp.get("state"))
+    end_status = comp.get("end_status")
+    if end_status is not None and end_status != "succeeded":
+        return SKIP_FAILED.format(why=f"end_status={end_status}")
     if comp.get("exit_code") not in (0, None, "0"):
-        return SKIP_FAILED.format(code=comp.get("exit_code"))
+        return SKIP_FAILED.format(why=f"exit_code={comp.get('exit_code')}")
     if comp.get("has_results") is False:
         return SKIP_NO_RESULTS
     return None

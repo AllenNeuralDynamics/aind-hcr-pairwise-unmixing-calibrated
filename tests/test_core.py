@@ -988,3 +988,51 @@ def test_processing_json_does_not_claim_absent_spot_tables():
                                if write_spots else [])})
         blob = json.dumps(dp)
         assert blob.count("_unmixed_spots.parquet") == expected
+
+
+def test_gate_rejects_both_kinds_of_failure():
+    """Neither end_status nor exit_code alone is sufficient.
+
+    Field values taken from real computations on capsule f8032cb6: f8ca3896 has
+    exit_code=0 with end_status="failed", and d20036dc has end_status="succeeded" with
+    exit_code=1. Checking only one field lets one of these become an asset.
+    """
+    import importlib.util
+    from pathlib import Path as _P
+
+    here = _P(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_rra", here / "tools" / "register_result_asset.py")
+    rra = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rra)
+
+    ok = {"state": "completed", "end_status": "succeeded", "exit_code": 0,
+          "has_results": True}
+    assert rra.gate(ok) is None
+
+    stopped = dict(ok, end_status="failed", has_results=False)
+    assert "end_status=failed" in rra.gate(stopped)
+
+    nonzero = dict(ok, exit_code=1, has_results=False)
+    assert "exit_code=1" in rra.gate(nonzero)
+
+    assert rra.gate(dict(ok, has_results=False)) == rra.SKIP_NO_RESULTS
+    assert "not finished" in rra.gate(dict(ok, state="running"))
+
+
+def test_results_url_route_matches_official_client():
+    """We call results/urls, not the deprecated results/download_url.
+
+    codeocean 0.16.0 deprecates Computations.get_result_file_download_url in favour of
+    get_result_file_urls, which GETs computations/<id>/results/urls.
+    """
+    from pathlib import Path as _P
+
+    src = (_P(__file__).resolve().parent.parent
+           / "tools" / "register_result_asset.py").read_text()
+    # Only _api() call sites count; the deprecated route is named in a comment on
+    # purpose, to say why it is not used.
+    calls = [ln for ln in src.splitlines()
+             if "_api(" in ln and "results/" in ln and not ln.lstrip().startswith("#")]
+    assert calls, "no results-route _api call found"
+    assert all("results/urls" in ln for ln in calls), calls

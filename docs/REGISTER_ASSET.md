@@ -84,13 +84,26 @@ that is strictly better than either mode above and this script becomes unnecessa
 
 | Condition | Behaviour |
 |---|---|
-| `exit_code != 0` | skipped — a failed run must not become an asset |
+| `end_status != "succeeded"` | skipped — a failed or stopped run must not become an asset |
+| `exit_code != 0` | skipped — same reason; **both** fields are checked, because neither alone is sufficient (see below) |
 | `has_results` false | skipped — nothing to capture |
 | no `asset_manifest.json` | skipped — run predates this feature, or used `--no-metadata` |
 | asset with that name exists | skipped — already registered |
 
-On the capsule's 8 computations as of 2026-08-19, a sweep skips 5 before making any
-create call: four exited non-zero and one produced no results.
+**Why both status fields.** On this capsule, computation `f8ca3896` carries `exit_code=0`
+with `end_status="failed"` — stopped before the script's own exit status meant anything —
+while `d20036dc` carries `end_status="succeeded"` with `exit_code=1` — the script ran to
+completion and reported failure. Checking either field alone lets one of those two become
+an asset.
+
+On the capsule's 8 computations as of 2026-08-19, a sweep skips 6 before making any create
+call: four non-zero exits, one `end_status="failed"`, and one already registered.
+
+**API routes.** The script matches the official `codeocean` client (0.16.0):
+`GET computations/<id>/results/urls` for the manifest download URL (the older
+`results/download_url` route is deprecated there), `POST data_assets/search` for the
+duplicate check, and `POST data_assets` with `source.computation.id` to create. Auth is
+HTTP basic with the token as username and an empty password, as the client does.
 
 ## Asset name
 
