@@ -349,6 +349,39 @@ standalone.
 
 Written to `/root/capsule/results`. `<M>` is the mouse id, `<R>` the round key.
 
+### Runtime and output size
+
+Six rounds of 800995 take about 32 min of unmixing. The wall-clock you see in Code Ocean
+is longer than the script's own timer reports, because **Code Ocean uploads `/results` to
+S3 after the script exits** — that transfer is not inside any timer the run controls. The
+spot tables dominate that volume, so they are written with zstd level 3 and narrowed
+dtypes: 15.4 GB with pandas' snappy default becomes **6.3 GB**, verified value-identical
+on a full round-trip. zstd is also marginally faster to write than snappy here, since
+less output means less I/O.
+
+If a run still feels slow after the "all N rounds unmixed" line, the remaining time is
+the upload, not computation — everything between that line and process exit is about two
+seconds (cell x gene pivot, four CSVs, the .h5ad, and the four figures).
+
+### Plots
+
+`results/plots/` gets four heatmaps, written from the annotated AnnData's own labels:
+
+| file | cells | gene order |
+|---|---|---|
+| `cellxgene_all_std.png` | all | biology-grouped |
+| `cellxgene_all_rc.png` | all | acquisition (round x channel) |
+| `cellxgene_inhibitory_std.png` | inhibitory | biology-grouped |
+| `cellxgene_inhibitory_rc.png` | inhibitory | acquisition |
+
+Each shows raw counts beside the normalised matrix. Pass `--no-plots` to skip them; a
+missing matplotlib degrades to a warning rather than losing the run's results.
+
+Labels come from `obs.cluster` rather than being recomputed at plot time. That is
+deliberate: recomputing means re-deriving cluster order from the matrix, and a label frame
+whose row order differs from its cell-id order pairs every label with the wrong cells —
+which looks like randomised data rather than a plotting bug.
+
 | file | one row per | why it exists |
 |---|---|---|
 | `<M>_<R>_unmixed_spots.parquet` | spot (all of them) | **The primary output.** Every input spot survives, annotated with what the algorithm decided and why. Nothing is deleted — `v3_action` says what a downstream step should do. One file per round because a round is 2–25 M spots. |

@@ -363,6 +363,32 @@ def test_any_interneuron_marker_calls_inhibitory():
     assert cls.iloc[0] != "inhibitory"
 
 
+def test_gene_orders_are_complete_permutations():
+    """Both gene orderings must contain every column exactly once.
+
+    A dropped column would silently omit a gene from the heatmap; a duplicated one would
+    plot it twice. The std order is built by walking a fixed name list, so a panel gene
+    missing from that list has to fall through to the tail rather than vanish.
+    """
+    import pandas as pd
+    from aind_hcr_pairwise_unmixing_calibrated import plots as P
+
+    cols = ["R1-561-Slc17a7", "R5-514-Pvalb", "R4-638-Gad2", "R2-488-Ndnf",
+            "R9-488-Unlisted"]
+    genes = ["Slc17a7", "Pvalb", "Gad2", "Ndnf", "Unlisted"]
+    var = pd.DataFrame({"gene": genes}, index=cols)
+
+    for kind in ("std", "rc"):
+        order = P.gene_order(var, kind)
+        assert sorted(order) == sorted(cols), f"{kind} is not a permutation"
+        assert len(set(order)) == len(order), f"{kind} has duplicates"
+    # acquisition order really is round-then-channel, numerically not lexically
+    assert P.gene_order(var, "rc") == ["R1-561-Slc17a7", "R2-488-Ndnf", "R4-638-Gad2",
+                                       "R5-514-Pvalb", "R9-488-Unlisted"]
+    # a gene absent from STD_GENE_ORDER still appears, at the tail
+    assert "R9-488-Unlisted" in P.gene_order(var, "std")
+
+
 def test_slc17a7_high_cells_need_gad2_corroboration():
     """An interneuron marker alone cannot admit a strongly Slc17a7-positive cell.
 

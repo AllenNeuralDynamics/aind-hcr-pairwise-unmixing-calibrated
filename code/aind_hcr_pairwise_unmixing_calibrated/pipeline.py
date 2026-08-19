@@ -127,10 +127,45 @@ def round_inputs_from_asset(asset_dir, mouse_id, round_key, processed_root=None,
     return (str(acq) if acq.exists() else None), (diag or None)
 
 
+#: Parquet options for the per-round spot tables. These files dominate the capsule's
+#: output: six rounds of 800995 came to 15.4 GB with pandas' default snappy, and Code
+#: Ocean uploads /results to S3 AFTER the script exits -- so that volume is wall-clock
+#: the run's own timer never sees, and was most of the gap between "32 min unmixed" and
+#: an hour and a quarter observed end to end. zstd level 3 takes the same set to 6.3 GB
+#: (59% smaller) and is marginally FASTER to write than snappy, because less output means
+#: less I/O. Verified value-identical on a full R5 round-trip before adoption.
+_PARQUET_OPTS = dict(compression="zstd", compression_level=3)
+
+#: Columns safe to narrow before writing: every one is an index, coordinate or count that
+#: cannot exceed int32 on data of this scale, and the four object columns hold a handful
+#: of distinct strings each so dictionary encoding is strictly better than repeating them
+#: 20M times. Narrowing is applied to the WRITTEN copy only -- it halves in-memory size
+#: too (8.6 GB -> 3.5 GB on R5) but the round's own arrays are untouched.
+_NARROW_INT = ("spot_id", "spot_uid_int", "chan_spot_id", "cell_id", "z", "y", "x")
+_NARROW_CAT = ("chan", "v3_chan", "crosstalk_source_chan", "decision_rule")
+
+
+def _narrow(spots):
+    """Downcast index/coordinate columns and dictionary-encode the low-cardinality ones.
+
+    Values are preserved exactly; only their storage type changes. Anything that does not
+    fit int32 is left alone rather than silently wrapping.
+    """
+    out = spots
+    for col in _NARROW_CAT:
+        if col in out.columns and str(out[col].dtype) == "object":
+            out[col] = out[col].astype("category")
+    for col in _NARROW_INT:
+        if col in out.columns and str(out[col].dtype) == "int64":
+            if out[col].abs().max() < 2 ** 31:
+                out[col] = out[col].astype("int32")
+    return out
+
+
 def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
               powers_by_round=None, output_dir=None, use_fgbg=True,
               processed_folder=None, write_metadata=True, experimenter=None,
-              write_anndata=True, **unmix_kw):
+              write_anndata=True, write_plots=True, **unmix_kw):
     """Unmix every round of one mouse and concatenate the cell x gene tables.
 
     Writes per-round spot tables and a combined cell x gene table when output_dir is
@@ -180,21 +215,30 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
         if output_dir:
             outp = Path(output_dir)
             outp.mkdir(parents=True, exist_ok=True)
-            res["spots"].to_parquet(
-                outp / f"{mouse_id}_{round_key}_unmixed_spots.parquet", index=False)
+            _t_w = _time.time()
+            _narrow(res["spots"]).to_parquet(
+                outp / f"{mouse_id}_{round_key}_unmixed_spots.parquet", index=False,
+                **_PARQUET_OPTS)
+            _mb = (outp / f"{mouse_id}_{round_key}_unmixed_spots.parquet").stat().st_size / 1e6
+            print(f"  [7/7] spot table written: {_mb:,.0f} MB in "
+                  f"{_time.time() - _t_w:.0f}s", flush=True)
         del spots, res
         print(f"  round {round_key} done ({_time.time() - _t_all:.0f}s elapsed)", flush=True)
     print(f"\n=== all {_n_rounds} rounds unmixed in {(_time.time() - _t_all)/60:.1f} min; "
           f"building cell x gene ===", flush=True)
+    _t_post = _time.time()
     cxg_all = pd.concat(cxgs, ignore_index=True)
     table = cxg_all.pivot_table(index="cell_id", columns="round_chan_gene",
                                 values="spot_count", aggfunc="sum", fill_value=0)
+    print(f"  cell x gene: {table.shape[0]:,} cells x {table.shape[1]} genes "
+          f"({_time.time() - _t_post:.0f}s)", flush=True)
     result = dict(cellxgene=table,
                   separability=pd.concat(seps, ignore_index=True),
                   decisions=pd.concat(logs, ignore_index=True),
                   summary=pd.DataFrame(summary))
     if output_dir:
         outp = Path(output_dir)
+        print("  writing tables...", flush=True)
         table.to_csv(outp / f"{mouse_id}_cellxgene.csv")
         result["separability"].to_csv(outp / f"{mouse_id}_separability.csv", index=False)
         result["decisions"].to_csv(outp / f"{mouse_id}_decisions.csv", index=False)
@@ -207,6 +251,11 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
                 h5 = outp / f"{mouse_id}_cellxgene_annotated.h5ad"
                 adata.write_h5ad(h5)
                 result["anndata"] = str(h5)
+                print(f"  annotated .h5ad written ({_time.time() - _t_post:.0f}s "
+                      "since unmixing finished)", flush=True)
+                if write_plots:
+                    from . import plots as _plots
+                    result["plots"] = _plots.write_plots(adata, outp, mouse_id, rounds)
             except ImportError as exc:
                 # anndata is an optional extra; a missing package must not lose the
                 # unmixing results that already succeeded.

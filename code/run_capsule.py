@@ -140,6 +140,8 @@ def main(argv=None):
     ap.add_argument("--output-dir", default=str(OUTPUT_DIR))
     ap.add_argument("--no-fgbg", action="store_true",
                     help="skip the fg/bg join (faster; output lacks fg/bg columns)")
+    ap.add_argument("--no-plots", action="store_true",
+                    help="skip the four standard cell x gene heatmaps in results/plots/")
     ap.add_argument("--no-anndata", action="store_true",
                     help="skip the annotated .h5ad (class/subclass/cluster labels)")
     ap.add_argument("--experimenter", default=None,
@@ -215,6 +217,7 @@ def main(argv=None):
         use_fgbg=not args.no_fgbg,
         write_metadata=not args.no_metadata,
         write_anndata=not args.no_anndata,
+        write_plots=not args.no_plots,
         experimenter=args.experimenter)
 
     print("\nper-channel spot change:")
@@ -246,6 +249,10 @@ def main(argv=None):
         n_cl = int((_a.obs['cluster_id'] >= 0).sum())
         print(f"  clusters: {_a.obs.loc[_a.obs.cluster_id >= 0, 'cluster'].nunique()}"
               f" over {n_cl:,} classified cells")
+    if res.get("plots"):
+        print(f"\nplots: {len(res['plots'])} figures in results/plots/")
+        for _p in res["plots"]:
+            print(f"  {_p}")
     print(f"written to {args.output_dir}")
     return 0
 
