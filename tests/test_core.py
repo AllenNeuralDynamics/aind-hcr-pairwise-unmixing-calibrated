@@ -711,6 +711,54 @@ def test_every_import_is_declared_in_the_environment():
         f"declared: {sorted(declared)}")
 
 
+def test_a_run_ignores_every_mount_belonging_to_another_mouse(tmp_path):
+    """With two mice mounted, nothing from the other mouse may reach the outputs.
+
+    The 782149 run had 24 assets mounted -- 13 of them 800995's, including 800995's own
+    pairwise-unmixing asset. Those mounts are permanently in that computation's
+    provenance, so it matters that they are inert rather than merely unused by luck.
+    Every discovery path filters on the mouse id; this asserts that rather than trusting
+    it, because the failure would be silent and would mix two animals' data.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import pipeline
+
+    data = tmp_path / "data"
+    wanted, other = "782149", "800995"
+    for mouse in (wanted, other):
+        asset = data / f"HCR_{mouse}_pairwise-unmixing_2026-07-14_18-11-49"
+        for r in ("R1", "R2"):
+            (asset / f"{mouse}_{r}").mkdir(parents=True)
+        proc = data / f"HCR_{mouse}_2026-04-08_13-00-00_processed_2026-04-13_21-37-30"
+        proc.mkdir(parents=True)
+        (proc / "acquisition.json").write_text("{}")
+
+    # asset discovery picks this mouse's asset, not the first one alphabetically
+    found = pipeline.__dict__.get("find_asset")
+    if found is None:                       # find_asset lives in run_capsule
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "rc", pathlib.Path(__file__).resolve().parent.parent / "code"
+            / "run_capsule.py")
+        rc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rc)
+        found = rc.find_asset
+    asset_dir = found(wanted, data)
+    assert wanted in asset_dir.name
+    assert other not in asset_dir.name
+
+    # the processed-asset candidates for this mouse exclude the other mouse entirely
+    cands = pipeline.candidate_processed_assets(data, wanted)
+    assert cands, "expected to find this mouse's processed asset"
+    assert all(wanted in c.name for c in cands)
+    assert not any(other in c.name for c in cands)
+
+    # and the per-round resolution, which feeds metadata source_dirs, agrees
+    acq, _ = pipeline.round_inputs_from_asset(asset_dir, wanted, "R1",
+                                              processed_root=data)
+    assert acq is not None
+    assert wanted in str(acq) and other not in str(acq)
+
+
 def test_pinned_versions_support_the_base_image_python():
     """Every pin must exist for the BASE IMAGE's Python, which is 3.10 -- not ours.
 
