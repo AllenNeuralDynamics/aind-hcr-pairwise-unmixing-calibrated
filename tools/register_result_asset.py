@@ -146,12 +146,17 @@ SKIP_NO_MANIFEST = (f"no {MANIFEST_NAME} in results -- run predates this feature
 def gate(comp):
     """Cheap checks from the computation record alone. Returns None when it may proceed.
 
-    Both end_status and exit_code are checked, because neither alone is sufficient: on
-    this capsule, computation f8ca3896 carries exit_code=0 with end_status="failed"
-    (the run was stopped before the script's own exit status meant anything), while
-    d20036dc carries end_status="succeeded" with exit_code=1 (the script ran to
-    completion and reported failure). Trusting either field by itself lets one of those
-    two become an asset.
+    end_status and exit_code are both checked because they mean different things and
+    disagree in practice. On this capsule, f8ca3896 carries exit_code=0 with
+    end_status="failed" (stopped before the script's own exit status meant anything),
+    while d20036dc carries end_status="succeeded" with exit_code=1 (the script ran to
+    completion and reported failure).
+
+    Neither of those two would have slipped through without the end_status check -- both
+    also have has_results=False, so the results check below already rejects them. The
+    case end_status actually guards is a run stopped part-way that DID leave results:
+    exit_code=0, has_results=True, end_status="failed". Not observed on this capsule,
+    which is precisely why it is worth a cheap check rather than an assumption.
     """
     if comp.get("state") not in (None, "completed"):
         return SKIP_NOT_DONE.format(state=comp.get("state"))

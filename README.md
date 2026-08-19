@@ -755,10 +755,12 @@ loop:
 python tools/register_result_asset.py --watch --interval 600     # every 10 min
 ```
 
-Both `end_status` and `exit_code` are checked because neither is sufficient alone: a run
-stopped part-way can carry `exit_code=0` with `end_status="failed"`, and a script that ran
-to completion and reported failure carries `end_status="succeeded"` with a non-zero
-`exit_code`.
+Both `end_status` and `exit_code` are checked because they mean different things and
+disagree in practice: a run stopped part-way can carry `exit_code=0` with
+`end_status="failed"`, while a script that ran to completion and reported failure carries
+`end_status="succeeded"` with a non-zero `exit_code`. The case `end_status` uniquely
+catches is the first of those *with results present* — the `has_results` check covers it
+otherwise.
 
 **Why a repeated sweep is safe.** The manifest name embeds the run's own UTC timestamp, so
 it is unique per run and doubles as the idempotency key: before creating anything, the

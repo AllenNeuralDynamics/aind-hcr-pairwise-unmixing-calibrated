@@ -90,14 +90,19 @@ that is strictly better than either mode above and this script becomes unnecessa
 | no `asset_manifest.json` | skipped — run predates this feature, or used `--no-metadata` |
 | asset with that name exists | skipped — already registered |
 
-**Why both status fields.** On this capsule, computation `f8ca3896` carries `exit_code=0`
-with `end_status="failed"` — stopped before the script's own exit status meant anything —
-while `d20036dc` carries `end_status="succeeded"` with `exit_code=1` — the script ran to
-completion and reported failure. Checking either field alone lets one of those two become
-an asset.
+**Why both status fields.** They mean different things and disagree in practice. On this
+capsule, `f8ca3896` carries `exit_code=0` with `end_status="failed"` — stopped before the
+script's own exit status meant anything — while `d20036dc` carries `end_status="succeeded"`
+with `exit_code=1` — the script ran to completion and reported failure.
+
+Neither of those two needed the `end_status` check to be caught: both also have
+`has_results=False`, so the results check already rejects them. The case `end_status`
+actually guards is a run stopped part-way that *did* leave results — `exit_code=0`,
+`has_results=True`, `end_status="failed"`. That combination does not appear among this
+capsule's runs, which is why it is worth a cheap check rather than an assumption.
 
 On the capsule's 8 computations as of 2026-08-19, a sweep skips 6 before making any create
-call: four non-zero exits, one `end_status="failed"`, and one already registered.
+call: four non-zero exits, one with no results, and one already registered.
 
 **API routes.** The script matches the official `codeocean` client (0.16.0):
 `GET computations/<id>/results/urls` for the manifest download URL (the older

@@ -991,11 +991,13 @@ def test_processing_json_does_not_claim_absent_spot_tables():
 
 
 def test_gate_rejects_both_kinds_of_failure():
-    """Neither end_status nor exit_code alone is sufficient.
+    """end_status and exit_code disagree in practice, so both are checked.
 
     Field values taken from real computations on capsule f8032cb6: f8ca3896 has
     exit_code=0 with end_status="failed", and d20036dc has end_status="succeeded" with
-    exit_code=1. Checking only one field lets one of these become an asset.
+    exit_code=1. Both of those also have has_results=False, so the results check alone
+    would reject them; the case end_status uniquely catches is asserted separately in
+    test_gate_rejects_stopped_run_that_left_results.
     """
     import importlib.util
     from pathlib import Path as _P
@@ -1036,3 +1038,27 @@ def test_results_url_route_matches_official_client():
              if "_api(" in ln and "results/" in ln and not ln.lstrip().startswith("#")]
     assert calls, "no results-route _api call found"
     assert all("results/urls" in ln for ln in calls), calls
+
+
+def test_gate_rejects_stopped_run_that_left_results():
+    """The case the end_status check uniquely catches.
+
+    A run stopped part-way can report exit_code=0 and still have written results. Such a
+    record passes both the exit_code and has_results checks, so end_status is the only
+    thing standing between it and a registered asset. No computation on capsule f8032cb6
+    has this combination, which is why it is asserted here rather than observed.
+    """
+    import importlib.util
+    from pathlib import Path as _P
+
+    here = _P(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_rra2", here / "tools" / "register_result_asset.py")
+    rra = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rra)
+
+    stopped_with_results = {"state": "completed", "end_status": "failed",
+                            "exit_code": 0, "has_results": True}
+    reason = rra.gate(stopped_with_results)
+    assert reason is not None, "a stopped run that left results must not be registered"
+    assert "end_status=failed" in reason
