@@ -711,6 +711,63 @@ def test_every_import_is_declared_in_the_environment():
         f"declared: {sorted(declared)}")
 
 
+def test_pinned_versions_support_the_base_image_python():
+    """Every pin must exist for the BASE IMAGE's Python, which is 3.10 -- not ours.
+
+    This caught nothing and cost a failed build once: matplotlib was pinned to 3.11.0
+    because that is what the development machine had, and 3.11.0 requires Python >= 3.11,
+    so the capsule build died at `pip install`. The anndata pin (0.11.4, not 0.12+) exists
+    for exactly the same reason and is the evidence the constraint is real.
+
+    The check is a floor, not a resolver: it asserts each pinned version is not known to
+    need a newer Python than the base image has. It cannot see PyPI, so it encodes the
+    minimum-Python boundaries that have actually bitten.
+    """
+    import json
+
+    #: The base image is codeocean/lightning-jupyterlab, which ships Python 3.10. Bump
+    #: this only after confirming a NEW base image, not after upgrading a dev machine.
+    BASE_PYTHON = (3, 10)
+
+    #: (package, first version that requires a newer Python, that Python). Taken from the
+    #: failed build's own pip output rather than from memory.
+    NEEDS_NEWER = [("matplotlib", (3, 11, 0), (3, 11)),
+                   ("anndata", (0, 12, 0), (3, 11))]
+
+    env = json.loads((pathlib.Path(__file__).resolve().parent.parent
+                      / ".codeocean" / "environment.json").read_text())
+    pinned = {p["name"]: p["version"]
+              for p in env["installers"]["pip"]["packages"]}
+
+    def parse(v):
+        return tuple(int(x) for x in v.split(".") if x.isdigit())
+
+    for name, boundary, needs in NEEDS_NEWER:
+        if name not in pinned:
+            continue
+        got = parse(pinned[name])
+        assert got < boundary, (
+            f"{name}=={pinned[name]} requires Python >= {'.'.join(map(str, needs))}, "
+            f"but the base image has {'.'.join(map(str, BASE_PYTHON))}. "
+            f"Pin below {'.'.join(map(str, boundary))}.")
+
+
+def test_dockerfile_and_environment_json_pin_the_same_versions():
+    """The Dockerfile is generated from environment.json; a drift between them means the
+    build installs something other than what the manifest claims."""
+    import json
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    env = json.loads((root / ".codeocean" / "environment.json").read_text())
+    declared = {p["name"]: p["version"]
+                for p in env["installers"]["pip"]["packages"]}
+    dockerfile = (root / "environment" / "Dockerfile").read_text()
+    for name, version in declared.items():
+        assert re.search(rf"{re.escape(name)}=={re.escape(version)}\b", dockerfile), (
+            f"environment.json pins {name}=={version} but the Dockerfile does not")
+
+
 def test_dockerfile_hash_header_matches_body():
     """Code Ocean recognises a generated Dockerfile by `# hash:sha256:<sha of body>`.
 
