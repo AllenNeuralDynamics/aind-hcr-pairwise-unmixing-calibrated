@@ -42,7 +42,12 @@ CLASS_MARKERS = {"excitatory": "Slc17a7", "inhibitory": "Gad2"}
 #: interneuron types). A cell strongly expressing any canonical interneuron marker is
 #: inhibitory whether or not its Gad2 reading cleared the threshold.
 #:
-INHIBITORY_MARKERS = ("Gad2", "Pvalb", "Vip", "Sst")
+#: Npy is included and Lamp5 deliberately is NOT, though both are interneuron-associated.
+#: Lamp5 is expressed in 45% of ALL cells here (median 84, against 10/5/8 for
+#: Pvalb/Sst/Vip), so gating on it would admit most of the excitatory population; Npy is
+#: properly sparse (median 0, 1.9% of cells above threshold). Lamp5 remains a SUBCLASS
+#: gene -- it names a group once a cell is already inhibitory -- but it cannot admit one.
+INHIBITORY_MARKERS = ("Gad2", "Pvalb", "Vip", "Sst", "Npy")
 
 #: Genes barred from cluster marker names on top of the subclass genes. Round 6
 #: (Sncg, Adra1b, Cnr1, Adra1a, Htr3a) is excluded by request: those genes are broadly
@@ -150,6 +155,10 @@ def assign_class(table, min_counts=MIN_CLASS_COUNTS, markers=CLASS_MARKERS,
 
     EXCITATORY: Slc17a7 at or above `min_counts`, and no inhibitory marker.
 
+    Slc17a7-HIGH cells need Gad2 corroboration: an interneuron marker alone is not
+    enough when the cell is also strongly excitatory-positive, since a moderate Pvalb
+    reading in an excitatory cell would otherwise admit it.
+
     UNASSIGNED: everything else. That is two distinct situations, both worth keeping
     visible rather than forced into a class:
       * genuinely ambiguous -- Gad2 AND Slc17a7 both above threshold. A double-positive
@@ -177,9 +186,24 @@ def assign_class(table, min_counts=MIN_CLASS_COUNTS, markers=CLASS_MARKERS,
         per_marker[g] = int(hit.sum())
         pos_inh |= hit
 
+    # A cell clearing an interneuron marker while ALSO strongly Slc17a7-positive needs
+    # Gad2 corroboration. Without it, an excitatory cell carrying a moderate Pvalb
+    # reading is admitted and then clusters with interneurons: on 800995 that produced
+    # 1,012 cells (14.4% of the inhibitory class) across three clusters whose Slc17a7
+    # medians were 743-806 with Gad2 medians of 26-76 -- i.e. plainly excitatory, let in
+    # on Pvalb medians of 154-196 against a real Pvalb cluster's 262. Requiring Gad2
+    # rejects 78% of those while keeping 99.1% of genuine inhibitory cells.
+    #
+    # Gad2 rather than a per-marker threshold: raising each marker to its own 95th
+    # percentile was measured on the same cells and rejected only 1 of the 1,012 while
+    # discarding 132 genuine ones -- the contaminants' Pvalb is genuinely above any
+    # sensible marker threshold, so only a SECOND marker distinguishes them.
+    slc_high = pos_exc
+    corroborated = pos_inh & (~slc_high | pos_gad)
+
     ambiguous = pos_gad & pos_exc          # both class markers -> refuse to call
-    out[pos_inh & ~ambiguous] = "inhibitory"
-    out[pos_exc & ~pos_inh] = "excitatory"
+    out[corroborated & ~ambiguous] = "inhibitory"
+    out[pos_exc & ~corroborated] = "excitatory"
 
     info = dict(markers_available={"excitatory": (exc_col or "none"),
                                    "inhibitory": (gad_col or "none")},

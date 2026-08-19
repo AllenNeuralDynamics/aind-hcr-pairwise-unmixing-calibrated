@@ -363,6 +363,66 @@ def test_any_interneuron_marker_calls_inhibitory():
     assert cls.iloc[0] != "inhibitory"
 
 
+def test_slc17a7_high_cells_need_gad2_corroboration():
+    """An interneuron marker alone cannot admit a strongly Slc17a7-positive cell.
+
+    This is the rule that removed 1,081 cells from the inhibitory class on 800995 --
+    three clusters with Slc17a7 medians of 743-806 and Gad2 medians of 26-76, admitted
+    on Pvalb medians of 154-196 against a real Pvalb cluster's 262. Every one of the
+    1,081 was Slc17a7-positive and none had Gad2 >= threshold, so they moved to
+    excitatory rather than to unassigned.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table(n_inh=6, n_exc=6)
+    thr = A.MIN_CLASS_COUNTS
+    pv = t.columns[t.columns.str.endswith("Pvalb")][0]
+    gd = t.columns[t.columns.str.endswith("Gad2")][0]
+    sl = t.columns[t.columns.str.endswith("Slc17a7")][0]
+
+    # Pvalb-positive AND Slc17a7-high, no Gad2 -> NOT inhibitory (the contaminant case)
+    t.loc[t.index[0], [pv, sl, gd]] = [5 * thr, 8 * thr, 0]
+    # the same Pvalb signal WITH Gad2 -> corroborated, but Gad2+Slc17a7 both high is the
+    # pre-existing AMBIGUOUS case, which takes precedence -> unassigned, not inhibitory.
+    # So corroboration never admits an Slc17a7-high cell; its effect is to move cells
+    # that used to be inhibitory into excitatory (no Gad2) or unassigned (Gad2 too).
+    t.loc[t.index[1], [pv, sl, gd]] = [5 * thr, 8 * thr, 5 * thr]
+    # Pvalb-positive with LOW Slc17a7 -> inhibitory, no corroboration needed
+    t.loc[t.index[2], [pv, sl, gd]] = [5 * thr, 0, 0]
+
+    cls, info = A.assign_class(t)
+    assert cls.iloc[0] != "inhibitory", "Slc17a7-high + Pvalb, no Gad2 must not be inhibitory"
+    assert cls.iloc[0] == "excitatory", "it is Slc17a7-positive, so excitatory is the call"
+    assert cls.iloc[1] == "unassigned", "Gad2 AND Slc17a7 both high stays ambiguous"
+    assert cls.iloc[2] == "inhibitory", "low Slc17a7 needs no corroboration"
+    assert info["n_ambiguous_gad2_and_slc17a7"] >= 1
+
+
+def test_lamp5_is_a_subclass_gene_but_never_admits():
+    """Lamp5 must not be in the admission gate.
+
+    It is expressed in 45% of ALL cells on 800995 (median 84, against 10/5/8 for
+    Pvalb/Sst/Vip), so gating on it would admit most of the excitatory population --
+    30,966 of its 34,235 positive cells are excitatory. Npy is the sparse alternative
+    that was added instead (median 0, 1.9% of cells positive).
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    assert "Lamp5" not in A.INHIBITORY_MARKERS
+    assert "Npy" in A.INHIBITORY_MARKERS
+    assert "Lamp5" in A.SUBCLASS_GENES, "still names a group once a cell IS inhibitory"
+
+    t = _fake_table(n_inh=4, n_exc=4)
+    for g in A.INHIBITORY_MARKERS:                 # zero every admission marker present
+        hits = t.columns[t.columns.str.endswith(g)]
+        if len(hits):
+            t[hits[0]] = 0
+    lam = t.columns[t.columns.str.endswith("Lamp5")][0]
+    t.loc[t.index[0], lam] = 50 * A.MIN_CLASS_COUNTS
+    cls, _ = A.assign_class(t)
+    assert cls.iloc[0] != "inhibitory", "Lamp5 alone must not admit a cell"
+
+
 def test_marker_names_exclude_round6_and_gate_genes():
     """Round-6 genes, the class gates and GFP never appear in a cluster name."""
     from aind_hcr_pairwise_unmixing_calibrated import annotate as A
