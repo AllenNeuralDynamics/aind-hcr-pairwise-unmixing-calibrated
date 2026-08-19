@@ -157,14 +157,15 @@ warning when assets for other mice were mounted.
 timestamp inside `data_description.json` agree — deriving it independently in each place
 would make them differ by however long post-processing took.
 
-## Two unrelated fixes worth doing in the same pass
+## One unrelated fix worth doing in the same pass
 
-**Add `--no-spots`.** The five per-round spot parquets are 2,032 MB of the 2,101 MB
-asset (96.7%); the cell-by-gene table the asset is named for is 1.7 MB. `pipeline.py`
-line 219 writes them unconditionally whenever `output_dir` is set, and there is no flag
-to suppress them alongside the existing `--no-plots` / `--no-anndata` / `--no-metadata`.
-Either add the flag, or write the spot tables to a separate output path so they can be
-registered as their own asset.
+**`--no-spots` (done in this change).** The five per-round spot parquets are 2,032 MB of
+the 2,101 MB asset (96.7%); the cell-by-gene table the asset is named for is 1.7 MB. They
+had no flag alongside `--no-plots` / `--no-anndata` / `--no-metadata`. There is now
+`--no-spots`, but the tables remain **on by default**: they are the only record of the
+per-spot decisions and the cell x gene table cannot be rebuilt without them, so the flag is
+for the case where the cell x gene table is genuinely all that is wanted. When it is
+passed, `processing.json` records no spot outputs rather than naming absent files.
 
 **Reconsider the parent selection.** `pipeline.py` takes the first `source_dirs` entry
 that has a `data_description.json`, which is an arbitrary one of the five mounted

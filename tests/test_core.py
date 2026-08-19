@@ -918,3 +918,73 @@ def test_write_manifest_tolerates_missing_data_dir(tmp_path):
     assert man["input_assets"] == {"unmixing": [], "processed": [], "raw": [],
                                   "other_mouse": []}
     assert "none" in man["description"]
+
+
+# ----------------------------------------------------------------- --no-spots
+
+
+def _run_mouse_kwargs_from_argv(argv):
+    """What run_capsule.main() would pass to pipeline.run_mouse for these args.
+
+    Exercises the real CLI parsing and the real call, with run_mouse stubbed, so the
+    default for write_spots is asserted against the actual wiring rather than a copy.
+    """
+    import importlib.util
+    import sys
+    from pathlib import Path as _P
+
+    here = _P(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("_rc", here / "code" / "run_capsule.py")
+    rc = importlib.util.module_from_spec(spec)
+    sys.modules["_rc"] = rc
+    spec.loader.exec_module(rc)
+
+    seen = {}
+
+    def fake_run_mouse(*a, **kw):
+        seen.update(kw)
+        raise _StopRun()
+
+    class _StopRun(Exception):
+        pass
+
+    rc.pipeline.run_mouse = fake_run_mouse
+    rc.find_asset = lambda mouse_id, data_dir: _P("/tmp/asset")
+    rc.discover_rounds = lambda asset, mouse_id: ["R1", "R4"]
+    rc.gene_map_for_round = lambda asset, mouse_id, r: {"488": "GFP"}
+    rc.pipeline.round_inputs_from_asset = lambda *a, **k: (None, None)
+    try:
+        rc.main(argv)
+    except _StopRun:
+        pass
+    return seen
+
+
+def test_spot_tables_are_written_by_default():
+    """The spot tables are the primary output; they must not need a flag to appear."""
+    kw = _run_mouse_kwargs_from_argv(["--mouse-id", "782149"])
+    assert kw["write_spots"] is True
+
+
+def test_no_spots_flag_suppresses_them():
+    kw = _run_mouse_kwargs_from_argv(["--mouse-id", "782149", "--no-spots"])
+    assert kw["write_spots"] is False
+    # the other outputs are unaffected
+    assert kw["write_anndata"] is True
+    assert kw["write_metadata"] is True
+    assert kw["write_plots"] is True
+
+
+def test_processing_json_does_not_claim_absent_spot_tables():
+    """outputs.spots must list only files that were actually written."""
+    from aind_hcr_pairwise_unmixing_calibrated import metadata as M
+
+    for write_spots, expected in ((True, 2), (False, 0)):
+        dp = M.unmixing_data_process(
+            input_locations=["/in"], output_location="/out",
+            parameters={"write_spots": write_spots},
+            outputs={"cellxgene": "782149_cellxgene.csv",
+                     "spots": ([f"782149_{r}_unmixed_spots.parquet" for r in ("R1", "R2")]
+                               if write_spots else [])})
+        blob = json.dumps(dp)
+        assert blob.count("_unmixed_spots.parquet") == expected

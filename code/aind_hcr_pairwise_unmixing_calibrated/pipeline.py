@@ -166,12 +166,17 @@ def _narrow(spots):
 def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
               powers_by_round=None, output_dir=None, use_fgbg=True,
               processed_folder=None, write_metadata=True, experimenter=None,
-              write_anndata=True, write_plots=True, **unmix_kw):
+              write_anndata=True, write_plots=True, write_spots=True, **unmix_kw):
     """Unmix every round of one mouse and concatenate the cell x gene tables.
 
     Writes per-round spot tables and a combined cell x gene table when output_dir is
     given. Laser power is read per round from acquisition.json unless powers_by_round
     supplies it explicitly.
+
+    write_spots defaults True: the per-round spot tables are the primary output, the only
+    place the per-spot decisions survive, and the cell x gene table cannot be re-derived
+    without them. Pass False (--no-spots) only when the cell x gene table is all that is
+    wanted and the ~2 GB per mouse is not worth keeping.
     """
     import time as _time
     _t_all = _time.time()
@@ -213,7 +218,7 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
                                 gene=gene_maps[round_key].get(c),
                                 n_detected=n_det, n_final=n_fin,
                                 pct_change=round(100 * (n_fin - n_det) / max(n_det, 1), 2)))
-        if output_dir:
+        if output_dir and write_spots:
             outp = Path(output_dir)
             outp.mkdir(parents=True, exist_ok=True)
             _t_w = _time.time()
@@ -223,6 +228,9 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
             _mb = (outp / f"{mouse_id}_{round_key}_unmixed_spots.parquet").stat().st_size / 1e6
             print(f"  [7/7] spot table written: {_mb:,.0f} MB in "
                   f"{_time.time() - _t_w:.0f}s", flush=True)
+        elif output_dir:
+            print("  [7/7] spot table NOT written (--no-spots); per-spot decisions for "
+                  f"{round_key} are discarded", flush=True)
         del spots, res
         print(f"  round {round_key} done ({_time.time() - _t_all:.0f}s elapsed)", flush=True)
     print(f"\n=== all {_n_rounds} rounds unmixed in {(_time.time() - _t_all)/60:.1f} min; "
@@ -267,15 +275,16 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
             result["creation_time"] = _dt.datetime.now(_dt.timezone.utc)
             result["metadata"] = _write_asset_metadata(
                 asset_dir, mouse_id, rounds, outp, processed_root, processed_folder,
-                result, dict(use_fgbg=use_fgbg, **unmix_kw),
+                result, dict(use_fgbg=use_fgbg, write_spots=write_spots, **unmix_kw),
                 experimenter=experimenter,
-                creation_time=result["creation_time"])
+                creation_time=result["creation_time"],
+                write_spots=write_spots)
     return result
 
 
 def _write_asset_metadata(asset_dir, mouse_id, rounds, outp, processed_root,
                           processed_folder, result, params, experimenter=None,
-                          creation_time=None):
+                          creation_time=None, write_spots=True):
     """Carry upstream schema files forward and record this step in processing.json.
 
     creation_time is passed in so data_description.json and the asset manifest written
@@ -311,8 +320,11 @@ def _write_asset_metadata(asset_dir, mouse_id, rounds, outp, processed_root,
         output_location=str(outp),
         parameters={"rounds": list(rounds), "mouse_id": mouse_id,
                     "processed_folder": processed_folder, **_jsonable(params)},
+        # Only claim files that were actually written: processing.json is the record of
+        # what this asset contains, and naming absent spot tables would make it wrong.
         outputs={"cellxgene": f"{mouse_id}_cellxgene.csv",
-                 "spots": [f"{mouse_id}_{r}_unmixed_spots.parquet" for r in rounds],
+                 "spots": ([f"{mouse_id}_{r}_unmixed_spots.parquet" for r in rounds]
+                           if write_spots else []),
                  "decisions": f"{mouse_id}_decisions.csv",
                  "spot_change": f"{mouse_id}_spot_change.csv",
                  "annotated_cellxgene": f"{mouse_id}_cellxgene_annotated.h5ad"},

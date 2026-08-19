@@ -142,6 +142,13 @@ def main(argv=None):
                     help="skip the fg/bg join (faster; output lacks fg/bg columns)")
     ap.add_argument("--no-plots", action="store_true",
                     help="skip the four standard cell x gene heatmaps in results/plots/")
+    ap.add_argument("--no-spots", action="store_true",
+                    help="skip the per-round <M>_<R>_unmixed_spots.parquet tables. They "
+                         "are written by DEFAULT and are the primary output -- the only "
+                         "record of the per-spot decisions, and the cell x gene table "
+                         "cannot be rebuilt without them. Use this only when the cell x "
+                         "gene table is all you want: they are ~2 GB per 5-round mouse "
+                         "and dominate both the asset size and the post-run upload.")
     ap.add_argument("--no-anndata", action="store_true",
                     help="skip the annotated .h5ad (class/subclass/cluster labels)")
     ap.add_argument("--experimenter", default=None,
@@ -208,6 +215,9 @@ def main(argv=None):
         else:
             fgbg_status = "joined from image_spot_detection"
     print(f"fg/bg   : {fgbg_status}")
+    # State this up front: --no-spots discards the per-spot decisions irrecoverably, and
+    # finding that out from an absent file after a 30-minute run is too late.
+    print(f"spots   : {'NOT written (--no-spots)' if args.no_spots else 'written per round'}")
 
     res = pipeline.run_mouse(
         asset, args.mouse_id, rounds, gene_maps,
@@ -218,6 +228,7 @@ def main(argv=None):
         write_metadata=not args.no_metadata,
         write_anndata=not args.no_anndata,
         write_plots=not args.no_plots,
+        write_spots=not args.no_spots,
         experimenter=args.experimenter)
 
     print("\nper-channel spot change:")
