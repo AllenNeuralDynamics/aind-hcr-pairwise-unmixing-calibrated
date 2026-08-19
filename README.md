@@ -360,8 +360,21 @@ on a full round-trip. zstd is also marginally faster to write than snappy here, 
 less output means less I/O.
 
 If a run still feels slow after the "all N rounds unmixed" line, the remaining time is
-the upload, not computation — everything between that line and process exit is about two
-seconds (cell x gene pivot, four CSVs, the .h5ad, and the four figures).
+the upload, not computation. The capsule prints two timings for that stretch: the cell x
+gene shape (under a second) and a cumulative figure at the `.h5ad` write, which was 2s on
+a real run. Benchmarked step by step on the six-round table of 800995:
+
+| step | seconds |
+|---|---|
+| `cellxgene.csv` | 0.21 |
+| three small CSVs | 0.03 |
+| `build_anndata` | 1.15 |
+| `write_h5ad` | 0.07 |
+| `write_plots` (4 figures) | 2.00 |
+| **total** | **3.46** |
+
+So the whole tail is a few seconds against tens of minutes of upload. Note the figures are
+written after the cumulative timing line prints, so they are not included in it.
 
 ### Plots
 
