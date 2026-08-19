@@ -25,6 +25,24 @@ Splits the job at the boundary where it naturally falls.
    `/api/v1/data_assets` with `source.computation.id` — no values re-derived by hand.
 
 **Run these from `/root/capsule/code`**, which is where a Code Ocean terminal opens.
+
+**If the API token is already attached to the capsule as a secret, no export is needed.**
+An attached api-key secret arrives under the field names in `.codeocean/secrets.json` —
+`API_KEY` and `API_SECRET` here — and the script reads those directly, checking
+`$CODEOCEAN_TOKEN`, `$API_SECRET`, `$API_KEY`, `$CO_TOKEN` in that order. It prints which
+variable each credential came from, so there is no guessing. An explicit
+`export CODEOCEAN_TOKEN=...` overrides an attached secret, which is how you point it at a
+different account. `$CO_CAPSULE_ID` is set inside a capsule, so `--capsule` is usually
+unnecessary there; `$CODEOCEAN_DOMAIN` is the one thing you may still have to export.
+
+To see which names are present without printing any value:
+
+```bash
+env | cut -d= -f1 | sort | grep -iE 'api|token|^co_'
+```
+
+Secrets are injected only into environments Code Ocean provides them to — a terminal in a
+cloud workstation may not have them even when the capsule is configured.
 The script lives at `code/tools/register_result_asset.py` — inside `code/` rather than
 at the repo root, for two reasons: that is the directory the terminal starts in, and it
 is the subtree Code Ocean is guaranteed to materialise. A repo-root `tools/` sorts last

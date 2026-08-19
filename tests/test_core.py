@@ -1,5 +1,6 @@
 """Synthetic ground-truth tests. No data assets required -- these run anywhere."""
 import json
+import os
 import pathlib
 from pathlib import Path
 
@@ -714,6 +715,92 @@ def test_every_import_is_declared_in_the_environment():
     assert not missing, (
         f"imported/needed but not installed by environment.json: {missing}\n"
         f"declared: {sorted(declared)}")
+
+
+def test_credentials_come_from_an_attached_secret_or_an_explicit_export():
+    """A token attached as a Code Ocean SECRET must work without any export.
+
+    Reported: the capsule already had the API token attached, but the script only read
+    $CODEOCEAN_TOKEN and refused to run. An attached api-key secret arrives under the names
+    declared in .codeocean/secrets.json -- API_KEY and API_SECRET for this capsule -- so
+    requiring CODEOCEAN_TOKEN made an already-configured capsule look unconfigured.
+
+    Precedence matters as much as acceptance: an explicit export has to override an
+    attached secret, otherwise there is no way to point the script at a different account.
+    """
+    import importlib.util
+
+    here = pathlib.Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_rra_env", here / "code" / "tools" / "register_result_asset.py")
+    rra = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rra)
+
+    # the capsule's declared secret field names are accepted
+    declared = json.loads((here / ".codeocean" / "secrets.json").read_text())
+    fields = {s["key"] for s in declared["secrets"]} | {
+        s["secret"] for s in declared["secrets"]}
+    assert fields & set(rra.TOKEN_VARS), (
+        f"secrets.json exposes {sorted(fields)}, none of which the script reads "
+        f"({list(rra.TOKEN_VARS)})")
+
+    saved = {k: os.environ.get(k) for k in
+             set(rra.TOKEN_VARS) | set(rra.DOMAIN_VARS) | set(rra.CAPSULE_VARS)}
+    try:
+        for k in saved:
+            os.environ.pop(k, None)
+
+        # nothing set -> no credential, and the message names where to look
+        assert rra._first_env(rra.TOKEN_VARS) == (None, None)
+        msg = rra._missing_credentials(None, None)
+        assert "API_SECRET" in msg and "secrets.json" in msg
+        assert "CODEOCEAN_DOMAIN" in msg
+
+        # an attached secret alone is enough
+        os.environ["API_SECRET"] = "from-attached-secret"
+        assert rra._first_env(rra.TOKEN_VARS) == ("from-attached-secret", "API_SECRET")
+
+        # an explicit export overrides it
+        os.environ["CODEOCEAN_TOKEN"] = "from-export"
+        assert rra._first_env(rra.TOKEN_VARS) == ("from-export", "CODEOCEAN_TOKEN")
+
+        # Code Ocean's own capsule id is picked up without --capsule
+        os.environ["CO_CAPSULE_ID"] = "abc-123"
+        assert rra._first_env(rra.CAPSULE_VARS) == ("abc-123", "CO_CAPSULE_ID")
+
+        # an empty value is not a credential
+        os.environ["CODEOCEAN_TOKEN"] = ""
+        assert rra._first_env(rra.TOKEN_VARS)[1] == "API_SECRET"
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def test_the_missing_credential_message_never_prints_a_secret_value():
+    """The guidance must name VARIABLES, never their contents -- a printed token in a run
+    log is a leaked token."""
+    import importlib.util
+
+    here = pathlib.Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_rra_leak", here / "code" / "tools" / "register_result_asset.py")
+    rra = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rra)
+
+    saved = os.environ.get("API_SECRET")
+    try:
+        os.environ["API_SECRET"] = "s3cr3t-value-do-not-print"
+        text = rra._missing_credentials(None, None)
+        assert "s3cr3t-value-do-not-print" not in text
+        assert "API_SECRET" in text          # the NAME is what helps
+    finally:
+        if saved is None:
+            os.environ.pop("API_SECRET", None)
+        else:
+            os.environ["API_SECRET"] = saved
 
 
 def test_a_run_ignores_every_mount_belonging_to_another_mouse(tmp_path):

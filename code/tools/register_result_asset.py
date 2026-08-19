@@ -40,6 +40,60 @@ from datetime import datetime, timezone
 TIMEOUT = 60
 MANIFEST_NAME = "asset_manifest.json"
 
+#: Environment variables checked in order for each credential. A token attached to the
+#: capsule as a Code Ocean SECRET arrives under the name declared in
+#: .codeocean/secrets.json -- this capsule declares an api-key secret whose fields are
+#: API_KEY and API_SECRET -- not under CODEOCEAN_TOKEN. Accepting both means an attached
+#: secret works with no export, while an explicit export still wins if you set one.
+#: CO_CAPSULE_ID is set by Code Ocean inside a capsule, so --capsule is usually redundant
+#: there. Order matters: the explicit CODEOCEAN_* names are checked first so that an
+#: export can always override an attached secret.
+TOKEN_VARS = ("CODEOCEAN_TOKEN", "API_SECRET", "API_KEY", "CO_TOKEN")
+DOMAIN_VARS = ("CODEOCEAN_DOMAIN", "CO_DOMAIN")
+CAPSULE_VARS = ("CODEOCEAN_CAPSULE_ID", "CO_CAPSULE_ID")
+
+
+def _first_env(names):
+    """(value, name_it_came_from) for the first of `names` that is set and non-empty."""
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value, name
+    return None, None
+
+
+def _missing_credentials(domain, token):
+    """Name what is missing, where it can come from, and how to check -- without ever
+    printing a secret value."""
+    lines = [""]
+    if not token:
+        lines += [
+            "No API token found. Checked, in order: "
+            + ", ".join("$" + v for v in TOKEN_VARS) + ".",
+            "",
+            "If the token is attached to the capsule as a secret, it appears under the",
+            "name declared in .codeocean/secrets.json (this capsule declares API_KEY and",
+            "API_SECRET). List the NAMES present without printing any value:",
+            "",
+            "    env | cut -d= -f1 | sort | grep -iE 'api|token|^co_'",
+            "",
+            "then export the one holding the token, e.g.:",
+            "",
+            "    export CODEOCEAN_TOKEN=\"$API_SECRET\"",
+            "",
+            "Secrets are only present in environments Code Ocean injects them into; a",
+            "plain terminal in a cloud workstation may not have them.",
+            "",
+        ]
+    if not domain:
+        lines += [
+            "No domain found. Checked: " + ", ".join("$" + v for v in DOMAIN_VARS) + ".",
+            "",
+            "    export CODEOCEAN_DOMAIN=https://codeocean.allenneuraldynamics.org",
+            "",
+        ]
+    return "\n".join(lines)
+
 
 # --------------------------------------------------------------------------- API
 
@@ -289,24 +343,28 @@ def main(argv=None):
                       help="show every run and whether it is ready; register nothing")
     mode.add_argument("--watch", action="store_true",
                       help="register every ready run (for cron / scheduled use)")
-    ap.add_argument("--capsule", default=os.environ.get("CODEOCEAN_CAPSULE_ID"),
-                    help="capsule id; defaults to $CODEOCEAN_CAPSULE_ID")
+    ap.add_argument("--capsule", default=_first_env(CAPSULE_VARS)[0],
+                    help="capsule id; defaults to $CODEOCEAN_CAPSULE_ID or $CO_CAPSULE_ID")
     ap.add_argument("--interval", type=int, default=0, metavar="SEC",
                     help="with --watch, keep polling every SEC seconds")
     ap.add_argument("--dry-run", action="store_true",
                     help="print what would be created, create nothing")
     args = ap.parse_args(argv)
 
-    domain = os.environ.get("CODEOCEAN_DOMAIN")
-    token = os.environ.get("CODEOCEAN_TOKEN")
+    domain, domain_src = _first_env(DOMAIN_VARS)
+    token, token_src = _first_env(TOKEN_VARS)
     if not domain or not token:
-        raise SystemExit("set CODEOCEAN_DOMAIN and CODEOCEAN_TOKEN")
+        raise SystemExit(_missing_credentials(domain, token))
+    print(f"domain from ${domain_src}; token from ${token_src}", flush=True)
 
     needs_capsule = args.latest or args.list or args.watch
     if not args.computation_id and not needs_capsule:
         raise SystemExit("give a computation_id, or one of --latest / --list / --watch")
     if needs_capsule and not args.capsule:
-        raise SystemExit("--latest/--list/--watch need --capsule or $CODEOCEAN_CAPSULE_ID")
+        raise SystemExit(
+            "--latest/--list/--watch need a capsule id: pass --capsule, or set "
+            + " or ".join("$" + v for v in CAPSULE_VARS)
+            + ". Inside a Code Ocean capsule $CO_CAPSULE_ID is set for you.")
 
     def fetch():
         if args.computation_id:
