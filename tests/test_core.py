@@ -237,7 +237,12 @@ def test_derived_data_description_names_itself_not_parent(tmp_path):
     doc = json.loads(Path(path).read_text())
 
     assert doc["name"] != parent.name                    # not the parent's name
-    assert doc["name"].startswith(parent.name)           # but derived from it
+    # Keyed on the SUBJECT, not the parent session: the capsule consumes every round of
+    # a mouse, so naming the asset after one processed session would assert a parentage
+    # that is only one-Nth true. This must match manifest.asset_name() so the asset
+    # record and the metadata inside it agree.
+    assert doc["name"].startswith("HCR_800995_")
+    assert not doc["name"].startswith(parent.name)
     assert M.PROCESS_SLUG in doc["name"]
     assert doc["data_level"] == "derived"
     assert doc["input_data_name"] == parent.name         # points AT the parent
@@ -817,3 +822,99 @@ def test_entry_point_imports_with_only_the_code_folder_present(tmp_path):
     # --help exits 0 after argparse prints usage; a missing package exits 1 on traceback
     assert "ModuleNotFoundError" not in r.stderr, r.stderr[-800:]
     assert "--mouse-id" in r.stdout, (r.stdout[-400:], r.stderr[-400:])
+
+
+# --------------------------------------------------------------------------- manifest
+
+
+def test_asset_name_format():
+    """HCR_<mouse>_<slug>_<date>_<time>, UTC, keyed on the mouse not a parent session."""
+    from datetime import datetime, timezone
+    from aind_hcr_pairwise_unmixing_calibrated import manifest as MF
+
+    t = datetime(2026, 8, 19, 7, 23, 53, tzinfo=timezone.utc)
+    assert MF.asset_name("782149", t) == "HCR_782149_unmixed-calibrated_2026-08-19_07-23-53"
+
+
+def test_asset_name_matches_data_description_name(tmp_path):
+    """The manifest name and data_description.json's name must be identical.
+
+    A mismatch means the asset record and the metadata inside the asset disagree, which
+    is what anything reading AIND metadata programmatically will trip over.
+    """
+    from datetime import datetime, timezone
+    from aind_hcr_pairwise_unmixing_calibrated import manifest as MF
+    from aind_hcr_pairwise_unmixing_calibrated import metadata as M
+
+    t = datetime(2026, 8, 19, 7, 23, 53, tzinfo=timezone.utc)
+    parent = tmp_path / "HCR_782149_2025-11-05_13-00-00_processed_2025-11-10_20-37-29"
+    parent.mkdir()
+    (parent / "data_description.json").write_text(json.dumps({
+        "schema_version": "1.0.4", "name": parent.name, "data_level": "derived",
+        "subject_id": "782149", "institution": {"name": "AIND"}}))
+    out = tmp_path / "results"
+    dd = json.loads(Path(M.derived_data_description(parent, out, creation_time=t)).read_text())
+    assert dd["name"] == MF.asset_name("782149", t)
+    assert dd["input_data_name"] == parent.name       # parent still recorded
+
+
+def test_classify_mounts_separates_other_mice():
+    """Assets for another mouse are reported, not silently dropped."""
+    from aind_hcr_pairwise_unmixing_calibrated import manifest as MF
+
+    mounts = [
+        "HCR_782149_pairwise-unmixing_2026-07-14_18-11-49",
+        "HCR_782149_2025-11-05_13-00-00",
+        "HCR_782149_2025-11-05_13-00-00_processed_2025-11-10_20-37-29",
+        "HCR_800995_2026-03-12_13-00-00",
+        "HCR_800995_pairwise-unmixing_2026-06-29_17-49-24",
+    ]
+    got = MF.classify_mounts(mounts, "782149")
+    assert got["unmixing"] == ["HCR_782149_pairwise-unmixing_2026-07-14_18-11-49"]
+    assert got["raw"] == ["HCR_782149_2025-11-05_13-00-00"]
+    assert got["processed"] == [
+        "HCR_782149_2025-11-05_13-00-00_processed_2025-11-10_20-37-29"]
+    assert len(got["other_mouse"]) == 2
+    # a mouse id that is a prefix of another must not match
+    assert MF.classify_mounts(["HCR_7821490_2025-11-05_13-00-00"], "782149")["raw"] == []
+
+
+def test_write_manifest_names_every_input(tmp_path):
+    """The description must name each input asset, including the unused ones."""
+    from datetime import datetime, timezone
+    from aind_hcr_pairwise_unmixing_calibrated import manifest as MF
+
+    data = tmp_path / "data"
+    for n in ("HCR_782149_pairwise-unmixing_2026-07-14_18-11-49",
+              "HCR_782149_2025-11-05_13-00-00",
+              "HCR_782149_2025-11-05_13-00-00_processed_2025-11-10_20-37-29",
+              "HCR_800995_2026-03-12_13-00-00"):
+        (data / n).mkdir(parents=True)
+    out = tmp_path / "results"
+    t = datetime(2026, 8, 19, 7, 23, 53, tzinfo=timezone.utc)
+    man = MF.write_manifest(out, "782149", ["R1", "R2"], data_dir=data,
+                            n_cells=25860, n_genes=22, creation_time=t)
+
+    saved = json.loads((out / "asset_manifest.json").read_text())
+    assert saved == man
+    assert man["name"] == "HCR_782149_unmixed-calibrated_2026-08-19_07-23-53"
+    assert man["mount"] == man["name"]
+    for n in ("HCR_782149_pairwise-unmixing_2026-07-14_18-11-49",
+              "HCR_782149_2025-11-05_13-00-00",
+              "HCR_800995_2026-03-12_13-00-00"):
+        assert n in man["description"]
+    assert "NOT used" in man["description"]
+    assert "25,860 cells x 22 genes" in man["description"]
+    assert man["custom_metadata"]["subject id"] == "782149"
+    assert man["rounds"] == ["R1", "R2"]
+
+
+def test_write_manifest_tolerates_missing_data_dir(tmp_path):
+    """No mounted data dir must not crash the run at its very last step."""
+    from aind_hcr_pairwise_unmixing_calibrated import manifest as MF
+
+    man = MF.write_manifest(tmp_path / "results", "782149", ["R1"],
+                            data_dir=tmp_path / "nope")
+    assert man["input_assets"] == {"unmixing": [], "processed": [], "raw": [],
+                                  "other_mouse": []}
+    assert "none" in man["description"]

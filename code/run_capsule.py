@@ -236,9 +236,12 @@ def main(argv=None):
         if meta.get("data_description"):
             import json as _j
             nm = _j.load(open(meta["data_description"]))["name"]
-            print(f"  derived asset : {nm}")
+            # NOT a registered asset -- just the name written into
+            # data_description.json. Nothing in this run creates a data asset; see
+            # docs/REGISTER_ASSET.md and tools/register_result_asset.py.
+            print(f"  data_description name : {nm}")
         else:
-            print("  derived asset : no parent data_description.json found - "
+            print("  data_description : no parent data_description.json found - "
                   "data_description.json NOT written")
     if res.get("anndata"):
         import anndata as _ad
@@ -253,6 +256,32 @@ def main(argv=None):
         print(f"\nplots: {len(res['plots'])} figures in results/plots/")
         for _p in res["plots"]:
             print(f"  {_p}")
+
+    # Asset manifest: what the registered data asset for this run should look like.
+    # This run cannot register it -- Code Ocean uploads /results to S3 only after this
+    # script exits -- so record the name, description and tags for
+    # tools/register_result_asset.py to act on afterwards.
+    if not args.no_metadata:
+        from aind_hcr_pairwise_unmixing_calibrated import manifest as _manifest
+        man = _manifest.write_manifest(
+            args.output_dir, args.mouse_id, rounds,
+            data_dir=args.data_dir,
+            n_cells=res["cellxgene"].shape[0],
+            n_genes=res["cellxgene"].shape[1],
+            creation_time=res.get("creation_time"),
+            capsule_name="aind-hcr-pairwise-unmixing-calibrated",
+            experimenter=args.experimenter)
+        used = man["input_assets"]
+        print(f"\nasset manifest: {man['name']}")
+        print(f"  inputs: {len(used['unmixing'])} unmixing, "
+              f"{len(used['processed'])} processed, {len(used['raw'])} raw")
+        if used["other_mouse"]:
+            print(f"  WARNING: {len(used['other_mouse'])} asset(s) for other mice were "
+                  f"mounted and NOT used; they are named in the manifest description "
+                  f"so the asset does not imply they contributed")
+        print("  register: python tools/register_result_asset.py --latest "
+              "(see docs/REGISTER_ASSET.md)")
+
     print(f"written to {args.output_dir}")
     return 0
 

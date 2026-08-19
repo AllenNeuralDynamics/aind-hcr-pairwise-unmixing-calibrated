@@ -4,6 +4,7 @@ This is the only module the capsule needs to call. It is deliberately a thin wra
 all algorithm decisions live in core.py -- so that the capsule's own code stays a
 data-plumbing script.
 """
+import datetime as _dt
 import json
 from pathlib import Path
 
@@ -261,16 +262,26 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
                 # unmixing results that already succeeded.
                 print(f"WARNING: AnnData not written ({exc}). pip install anndata")
         if write_metadata:
+            # One timestamp for data_description.json and the asset manifest, so the
+            # asset name and the metadata inside the asset agree.
+            result["creation_time"] = _dt.datetime.now(_dt.timezone.utc)
             result["metadata"] = _write_asset_metadata(
                 asset_dir, mouse_id, rounds, outp, processed_root, processed_folder,
                 result, dict(use_fgbg=use_fgbg, **unmix_kw),
-                experimenter=experimenter)
+                experimenter=experimenter,
+                creation_time=result["creation_time"])
     return result
 
 
 def _write_asset_metadata(asset_dir, mouse_id, rounds, outp, processed_root,
-                          processed_folder, result, params, experimenter=None):
-    """Carry upstream schema files forward and record this step in processing.json."""
+                          processed_folder, result, params, experimenter=None,
+                          creation_time=None):
+    """Carry upstream schema files forward and record this step in processing.json.
+
+    creation_time is passed in so data_description.json and the asset manifest written
+    by run_capsule.py carry the SAME timestamp; deriving it independently in each place
+    makes them differ by however long post-processing took.
+    """
     proc_dirs = []
     for round_key in rounds:
         acq, _ = round_inputs_from_asset(asset_dir, mouse_id, round_key,
@@ -289,7 +300,8 @@ def _write_asset_metadata(asset_dir, mouse_id, rounds, outp, processed_root,
     dd = None
     for d in source_dirs:
         dd = metadata.derived_data_description(
-            d, outp, investigators=[experimenter] if experimenter else None)
+            d, outp, creation_time=creation_time,
+            investigators=[experimenter] if experimenter else None)
         if dd:
             break
     upstream = metadata.find_upstream_processing(source_dirs)

@@ -593,7 +593,7 @@ The results directory is written as a proper derived asset, not a bare folder of
 - **`data_description.json` is written, not copied.** That file describes the *asset*,
   so copying the parent's would assert that our output is the parent. Following the
   convention the processed assets themselves use, the derived one gets
-  `name = <parent>_unmixed-calibrated_<timestamp>`, `data_level = "derived"`, and
+  `name = HCR_<subject>_unmixed-calibrated_<timestamp>`, `data_level = "derived"`, and
   `input_data_name = <parent>`, while inheriting subject, institution, modality,
   funding and licence unchanged. If no parent `data_description.json` is found, none is
   written — inventing those fields would be worse than omitting the file.
@@ -606,8 +606,32 @@ The results directory is written as a proper derived asset, not a bare folder of
   `processing.json` found is extended rather than replaced, so the processing history
   accumulates.
 
+- **`asset_manifest.json` records what the registered asset should be.** The name
+  (`HCR_<subject>_unmixed-calibrated_<timestamp>`), tags, custom metadata, and a
+  description naming every input data asset the run consumed — split into unmixing input,
+  processed, raw, and a fourth group for assets that were mounted but belong to a
+  different mouse, so the asset never implies they contributed. `data_description.json`
+  and this file share one `creation_time`, so the asset name and the metadata inside the
+  asset agree.
+
 Pass `--experimenter "Your Name"` to fill `processor_full_name`, or `--no-metadata` to
 skip the whole step.
+
+### Registering the result as a data asset
+
+The capsule **cannot** register its own result: Code Ocean uploads `/results` to S3 only
+after the run script exits, so during the run there is nothing to point an asset at.
+`tools/register_result_asset.py` closes the gap from outside, reading the manifest the run
+wrote. Manual and automatic modes both exist, and all of them are idempotent:
+
+```bash
+python tools/register_result_asset.py --list      # what's ready? register nothing
+python tools/register_result_asset.py --latest    # register the newest ready run
+python tools/register_result_asset.py --watch     # every ready run, for cron
+```
+
+Failed runs, runs without results, and already-registered runs are skipped with a reason.
+See [docs/REGISTER_ASSET.md](docs/REGISTER_ASSET.md).
 
 **Schema version.** These files are written as **1.1.4**, matching the `processing.json`
 already present in the HCR processed assets. The installed `aind-data-schema` library is
@@ -711,9 +735,13 @@ src/aind_hcr_pairwise_unmixing_calibrated/
     fgbg.py       raw foreground / local background join, and threshold helper
     annotate.py   AnnData with class / subclass / named cluster labels
     metadata.py   aind-data-schema files for the derived asset
+    manifest.py   asset_manifest.json - name/description/tags for the result asset
     pipeline.py   per-round and per-mouse drivers
+tools/
+    register_result_asset.py  create the Code Ocean data asset after a run
 tests/
     test_core.py  synthetic ground truth - ghosts with known identity
 docs/
     unmixing_summary.pdf      plain-language walkthrough, 14 pages
+    REGISTER_ASSET.md         registering results as data assets
 ```
