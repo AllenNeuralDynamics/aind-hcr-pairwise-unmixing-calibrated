@@ -714,9 +714,12 @@ def test_every_import_is_declared_in_the_environment():
 def test_a_run_ignores_every_mount_belonging_to_another_mouse(tmp_path):
     """With two mice mounted, nothing from the other mouse may reach the outputs.
 
-    The 782149 run had 24 assets mounted -- 13 of them 800995's, including 800995's own
-    pairwise-unmixing asset. Those mounts are permanently in that computation's
-    provenance, so it matters that they are inert rather than merely unused by luck.
+    The 782149 run had 24 assets mounted -- 13 of them 800995's (6 raw, 6 processed, and
+    800995's own pairwise-unmixing asset), against 11 for 782149 (5 raw, 5 processed, 1
+    pairwise). Those mounts are permanently in that computation's provenance, so it
+    matters that they are inert rather than merely unused by luck. The 800995 mounts have
+    since been detached, which is why .codeocean/datasets.json now lists 11; this test
+    recreates the two-mouse condition rather than depending on what is mounted today.
     Every discovery path filters on the mouse id; this asserts that rather than trusting
     it, because the failure would be silent and would mix two animals' data.
     """
