@@ -142,6 +142,13 @@ def main(argv=None):
                     help="skip the fg/bg join (faster; output lacks fg/bg columns)")
     ap.add_argument("--no-plots", action="store_true",
                     help="skip the four standard cell x gene heatmaps in results/plots/")
+    ap.add_argument("--no-spots", action="store_true",
+                    help="skip the per-round <M>_<R>_unmixed_spots.parquet tables. They "
+                         "are written by DEFAULT and are the primary output -- the only "
+                         "record of the per-spot decisions, and the cell x gene table "
+                         "cannot be rebuilt without them. Use this only when the cell x "
+                         "gene table is all you want: they are ~2 GB per 5-round mouse "
+                         "and dominate both the asset size and the post-run upload.")
     ap.add_argument("--no-anndata", action="store_true",
                     help="skip the annotated .h5ad (class/subclass/cluster labels)")
     ap.add_argument("--experimenter", default=None,
@@ -208,6 +215,9 @@ def main(argv=None):
         else:
             fgbg_status = "joined from image_spot_detection"
     print(f"fg/bg   : {fgbg_status}")
+    # State this up front: --no-spots discards the per-spot decisions irrecoverably, and
+    # finding that out from an absent file after a 30-minute run is too late.
+    print(f"spots   : {'NOT written (--no-spots)' if args.no_spots else 'written per round'}")
 
     res = pipeline.run_mouse(
         asset, args.mouse_id, rounds, gene_maps,
@@ -218,6 +228,7 @@ def main(argv=None):
         write_metadata=not args.no_metadata,
         write_anndata=not args.no_anndata,
         write_plots=not args.no_plots,
+        write_spots=not args.no_spots,
         experimenter=args.experimenter)
 
     print("\nper-channel spot change:")
@@ -236,9 +247,12 @@ def main(argv=None):
         if meta.get("data_description"):
             import json as _j
             nm = _j.load(open(meta["data_description"]))["name"]
-            print(f"  derived asset : {nm}")
+            # NOT a registered asset -- just the name written into
+            # data_description.json. Nothing in this run creates a data asset; see
+            # docs/REGISTER_ASSET.md and tools/register_result_asset.py.
+            print(f"  data_description name : {nm}")
         else:
-            print("  derived asset : no parent data_description.json found - "
+            print("  data_description : no parent data_description.json found - "
                   "data_description.json NOT written")
     if res.get("anndata"):
         import anndata as _ad
@@ -253,6 +267,32 @@ def main(argv=None):
         print(f"\nplots: {len(res['plots'])} figures in results/plots/")
         for _p in res["plots"]:
             print(f"  {_p}")
+
+    # Asset manifest: what the registered data asset for this run should look like.
+    # This run cannot register it -- Code Ocean uploads /results to S3 only after this
+    # script exits -- so record the name, description and tags for
+    # tools/register_result_asset.py to act on afterwards.
+    if not args.no_metadata:
+        from aind_hcr_pairwise_unmixing_calibrated import manifest as _manifest
+        man = _manifest.write_manifest(
+            args.output_dir, args.mouse_id, rounds,
+            data_dir=args.data_dir,
+            n_cells=res["cellxgene"].shape[0],
+            n_genes=res["cellxgene"].shape[1],
+            creation_time=res.get("creation_time"),
+            capsule_name="aind-hcr-pairwise-unmixing-calibrated",
+            experimenter=args.experimenter)
+        used = man["input_assets"]
+        print(f"\nasset manifest: {man['name']}")
+        print(f"  inputs: {len(used['unmixing'])} unmixing, "
+              f"{len(used['processed'])} processed, {len(used['raw'])} raw")
+        if used["other_mouse"]:
+            print(f"  WARNING: {len(used['other_mouse'])} asset(s) for other mice were "
+                  f"mounted and NOT used; they are named in the manifest description "
+                  f"so the asset does not imply they contributed")
+        print("  register: python tools/register_result_asset.py --latest "
+              "(see docs/REGISTER_ASSET.md)")
+
     print(f"written to {args.output_dir}")
     return 0
 

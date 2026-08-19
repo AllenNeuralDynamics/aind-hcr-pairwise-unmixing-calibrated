@@ -237,7 +237,12 @@ def test_derived_data_description_names_itself_not_parent(tmp_path):
     doc = json.loads(Path(path).read_text())
 
     assert doc["name"] != parent.name                    # not the parent's name
-    assert doc["name"].startswith(parent.name)           # but derived from it
+    # Keyed on the SUBJECT, not the parent session: the capsule consumes every round of
+    # a mouse, so naming the asset after one processed session would assert a parentage
+    # that is only one-Nth true. This must match manifest.asset_name() so the asset
+    # record and the metadata inside it agree.
+    assert doc["name"].startswith("HCR_800995_")
+    assert not doc["name"].startswith(parent.name)
     assert M.PROCESS_SLUG in doc["name"]
     assert doc["data_level"] == "derived"
     assert doc["input_data_name"] == parent.name         # points AT the parent
@@ -868,3 +873,367 @@ def test_entry_point_imports_with_only_the_code_folder_present(tmp_path):
     # --help exits 0 after argparse prints usage; a missing package exits 1 on traceback
     assert "ModuleNotFoundError" not in r.stderr, r.stderr[-800:]
     assert "--mouse-id" in r.stdout, (r.stdout[-400:], r.stderr[-400:])
+
+
+# --------------------------------------------------------------------------- manifest
+
+
+def test_asset_name_format():
+    """HCR_<mouse>_<slug>_<date>_<time>, UTC, keyed on the mouse not a parent session."""
+    from datetime import datetime, timezone
+    from aind_hcr_pairwise_unmixing_calibrated import manifest as MF
+
+    t = datetime(2026, 8, 19, 7, 23, 53, tzinfo=timezone.utc)
+    assert MF.asset_name("782149", t) == "HCR_782149_unmixed-calibrated_2026-08-19_07-23-53"
+
+
+def test_asset_name_matches_data_description_name(tmp_path):
+    """The manifest name and data_description.json's name must be identical.
+
+    A mismatch means the asset record and the metadata inside the asset disagree, which
+    is what anything reading AIND metadata programmatically will trip over.
+    """
+    from datetime import datetime, timezone
+    from aind_hcr_pairwise_unmixing_calibrated import manifest as MF
+    from aind_hcr_pairwise_unmixing_calibrated import metadata as M
+
+    t = datetime(2026, 8, 19, 7, 23, 53, tzinfo=timezone.utc)
+    parent = tmp_path / "HCR_782149_2025-11-05_13-00-00_processed_2025-11-10_20-37-29"
+    parent.mkdir()
+    (parent / "data_description.json").write_text(json.dumps({
+        "schema_version": "1.0.4", "name": parent.name, "data_level": "derived",
+        "subject_id": "782149", "institution": {"name": "AIND"}}))
+    out = tmp_path / "results"
+    dd = json.loads(Path(M.derived_data_description(parent, out, creation_time=t)).read_text())
+    assert dd["name"] == MF.asset_name("782149", t)
+    assert dd["input_data_name"] == parent.name       # parent still recorded
+
+
+def test_classify_mounts_separates_other_mice():
+    """Assets for another mouse are reported, not silently dropped."""
+    from aind_hcr_pairwise_unmixing_calibrated import manifest as MF
+
+    mounts = [
+        "HCR_782149_pairwise-unmixing_2026-07-14_18-11-49",
+        "HCR_782149_2025-11-05_13-00-00",
+        "HCR_782149_2025-11-05_13-00-00_processed_2025-11-10_20-37-29",
+        "HCR_800995_2026-03-12_13-00-00",
+        "HCR_800995_pairwise-unmixing_2026-06-29_17-49-24",
+    ]
+    got = MF.classify_mounts(mounts, "782149")
+    assert got["unmixing"] == ["HCR_782149_pairwise-unmixing_2026-07-14_18-11-49"]
+    assert got["raw"] == ["HCR_782149_2025-11-05_13-00-00"]
+    assert got["processed"] == [
+        "HCR_782149_2025-11-05_13-00-00_processed_2025-11-10_20-37-29"]
+    assert len(got["other_mouse"]) == 2
+    # a mouse id that is a prefix of another must not match
+    assert MF.classify_mounts(["HCR_7821490_2025-11-05_13-00-00"], "782149")["raw"] == []
+
+
+def test_write_manifest_names_every_input(tmp_path):
+    """The description must name each input asset, including the unused ones."""
+    from datetime import datetime, timezone
+    from aind_hcr_pairwise_unmixing_calibrated import manifest as MF
+
+    data = tmp_path / "data"
+    for n in ("HCR_782149_pairwise-unmixing_2026-07-14_18-11-49",
+              "HCR_782149_2025-11-05_13-00-00",
+              "HCR_782149_2025-11-05_13-00-00_processed_2025-11-10_20-37-29",
+              "HCR_800995_2026-03-12_13-00-00"):
+        (data / n).mkdir(parents=True)
+    out = tmp_path / "results"
+    t = datetime(2026, 8, 19, 7, 23, 53, tzinfo=timezone.utc)
+    man = MF.write_manifest(out, "782149", ["R1", "R2"], data_dir=data,
+                            n_cells=25860, n_genes=22, creation_time=t)
+
+    saved = json.loads((out / "asset_manifest.json").read_text())
+    assert saved == man
+    assert man["name"] == "HCR_782149_unmixed-calibrated_2026-08-19_07-23-53"
+    assert man["mount"] == man["name"]
+    for n in ("HCR_782149_pairwise-unmixing_2026-07-14_18-11-49",
+              "HCR_782149_2025-11-05_13-00-00",
+              "HCR_800995_2026-03-12_13-00-00"):
+        assert n in man["description"]
+    assert "NOT used" in man["description"]
+    assert "25,860 cells x 22 genes" in man["description"]
+    assert man["custom_metadata"]["subject id"] == "782149"
+    assert man["rounds"] == ["R1", "R2"]
+
+
+def test_write_manifest_tolerates_missing_data_dir(tmp_path):
+    """No mounted data dir must not crash the run at its very last step."""
+    from aind_hcr_pairwise_unmixing_calibrated import manifest as MF
+
+    man = MF.write_manifest(tmp_path / "results", "782149", ["R1"],
+                            data_dir=tmp_path / "nope")
+    assert man["input_assets"] == {"unmixing": [], "processed": [], "raw": [],
+                                  "other_mouse": []}
+    assert "none" in man["description"]
+
+
+# ----------------------------------------------------------------- --no-spots
+
+
+def _run_mouse_kwargs_from_argv(argv):
+    """What run_capsule.main() would pass to pipeline.run_mouse for these args.
+
+    Exercises the real CLI parsing and the real call, with run_mouse stubbed, so the
+    default for write_spots is asserted against the actual wiring rather than a copy.
+    """
+    import importlib.util
+    import sys
+    from pathlib import Path as _P
+
+    here = _P(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("_rc", here / "code" / "run_capsule.py")
+    rc = importlib.util.module_from_spec(spec)
+    sys.modules["_rc"] = rc
+    spec.loader.exec_module(rc)
+
+    seen = {}
+
+    def fake_run_mouse(*a, **kw):
+        seen.update(kw)
+        raise _StopRun()
+
+    class _StopRun(Exception):
+        pass
+
+    rc.pipeline.run_mouse = fake_run_mouse
+    rc.find_asset = lambda mouse_id, data_dir: _P("/tmp/asset")
+    rc.discover_rounds = lambda asset, mouse_id: ["R1", "R4"]
+    rc.gene_map_for_round = lambda asset, mouse_id, r: {"488": "GFP"}
+    rc.pipeline.round_inputs_from_asset = lambda *a, **k: (None, None)
+    try:
+        rc.main(argv)
+    except _StopRun:
+        pass
+    return seen
+
+
+def test_spot_tables_are_written_by_default():
+    """The spot tables are the primary output; they must not need a flag to appear."""
+    kw = _run_mouse_kwargs_from_argv(["--mouse-id", "782149"])
+    assert kw["write_spots"] is True
+
+
+def test_no_spots_flag_suppresses_them():
+    kw = _run_mouse_kwargs_from_argv(["--mouse-id", "782149", "--no-spots"])
+    assert kw["write_spots"] is False
+    # the other outputs are unaffected
+    assert kw["write_anndata"] is True
+    assert kw["write_metadata"] is True
+    assert kw["write_plots"] is True
+
+
+def test_processing_json_does_not_claim_absent_spot_tables():
+    """outputs.spots must list only files that were actually written."""
+    from aind_hcr_pairwise_unmixing_calibrated import metadata as M
+
+    for write_spots, expected in ((True, 2), (False, 0)):
+        dp = M.unmixing_data_process(
+            input_locations=["/in"], output_location="/out",
+            parameters={"write_spots": write_spots},
+            outputs={"cellxgene": "782149_cellxgene.csv",
+                     "spots": ([f"782149_{r}_unmixed_spots.parquet" for r in ("R1", "R2")]
+                               if write_spots else [])})
+        blob = json.dumps(dp)
+        assert blob.count("_unmixed_spots.parquet") == expected
+
+
+def test_gate_rejects_both_kinds_of_failure():
+    """end_status and exit_code disagree in practice, so both are checked.
+
+    Field values taken from real computations on capsule f8032cb6: f8ca3896 has
+    exit_code=0 with end_status="failed", and d20036dc has end_status="succeeded" with
+    exit_code=1. Both of those also have has_results=False, so the results check alone
+    would reject them; the case end_status uniquely catches is asserted separately in
+    test_gate_rejects_stopped_run_that_left_results.
+    """
+    import importlib.util
+    from pathlib import Path as _P
+
+    here = _P(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_rra", here / "tools" / "register_result_asset.py")
+    rra = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rra)
+
+    ok = {"state": "completed", "end_status": "succeeded", "exit_code": 0,
+          "has_results": True}
+    assert rra.gate(ok) is None
+
+    stopped = dict(ok, end_status="failed", has_results=False)
+    assert "end_status=failed" in rra.gate(stopped)
+
+    nonzero = dict(ok, exit_code=1, has_results=False)
+    assert "exit_code=1" in rra.gate(nonzero)
+
+    assert rra.gate(dict(ok, has_results=False)) == rra.SKIP_NO_RESULTS
+    assert "not finished" in rra.gate(dict(ok, state="running"))
+
+
+def test_results_url_route_matches_official_client():
+    """We call results/urls, not the deprecated results/download_url.
+
+    codeocean 0.16.0 deprecates Computations.get_result_file_download_url in favour of
+    get_result_file_urls, which GETs computations/<id>/results/urls.
+    """
+    from pathlib import Path as _P
+
+    src = (_P(__file__).resolve().parent.parent
+           / "tools" / "register_result_asset.py").read_text()
+    # Only _api() call sites count; the deprecated route is named in a comment on
+    # purpose, to say why it is not used.
+    calls = [ln for ln in src.splitlines()
+             if "_api(" in ln and "results/" in ln and not ln.lstrip().startswith("#")]
+    assert calls, "no results-route _api call found"
+    assert all("results/urls" in ln for ln in calls), calls
+
+
+def test_gate_rejects_stopped_run_that_left_results():
+    """The case the end_status check uniquely catches.
+
+    A run stopped part-way can report exit_code=0 and still have written results. Such a
+    record passes both the exit_code and has_results checks, so end_status is the only
+    thing standing between it and a registered asset. No computation on capsule f8032cb6
+    has this combination, which is why it is asserted here rather than observed.
+    """
+    import importlib.util
+    from pathlib import Path as _P
+
+    here = _P(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_rra2", here / "tools" / "register_result_asset.py")
+    rra = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rra)
+
+    stopped_with_results = {"state": "completed", "end_status": "failed",
+                            "exit_code": 0, "has_results": True}
+    reason = rra.gate(stopped_with_results)
+    assert reason is not None, "a stopped run that left results must not be registered"
+    assert "end_status=failed" in reason
+
+
+def _load_rra():
+    import importlib.util
+    from pathlib import Path as _P
+
+    here = _P(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_rra_mod", here / "tools" / "register_result_asset.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_manual_mode_does_not_bypass_the_gate():
+    """A bare {"id": ...} record passes every check vacuously.
+
+    gate() reads state/end_status/exit_code/has_results off the computation record, so
+    naming a computation on the command line must fetch the real record rather than
+    fabricate one from the id -- otherwise `register_result_asset.py <failed_run_id>`
+    would register a failed run.
+    """
+    rra = _load_rra()
+    assert rra.gate({"id": "whatever"}) is None, "bare record is vacuously acceptable"
+    assert hasattr(rra, "get_computation"), "manual mode needs a record fetch"
+
+    fetched = {}
+
+    def fake_api(path, token, domain, method="GET", body=None, params=None, soft=False):
+        fetched["path"] = path
+        return {"id": "d20036dc", "state": "completed", "end_status": "succeeded",
+                "exit_code": 1, "has_results": False}
+
+    rra._api = fake_api
+    comp = rra.get_computation("d20036dc", "t", "d")
+    assert fetched["path"] == "computations/d20036dc"
+    assert "exit_code=1" in rra.gate(comp), "the fetched record must be gated"
+
+
+def test_latest_reports_runs_it_passes_over():
+    """--latest must name what it skipped, not silently register an older run.
+
+    Registering an older run while saying nothing about the newest one reads as success
+    for the run the user just did.
+    """
+    import contextlib
+    import io
+
+    rra = _load_rra()
+    rra.read_manifest = lambda cid, t, d: {
+        "name": f"HCR_X_unmixed-calibrated_{cid}", "tags": [], "description": "x",
+        "input_assets": {}}
+    rra.asset_exists = lambda n, t, d: False
+    created = []
+    rra.create_asset = lambda cid, man, t, d: (
+        created.append(cid) or {"id": "new", "state": "draft"})
+
+    comps = [
+        {"id": "newest", "state": "completed", "end_status": "failed", "exit_code": 0,
+         "has_results": False, "created": 300},
+        {"id": "older", "state": "completed", "end_status": "succeeded", "exit_code": 0,
+         "has_results": True, "created": 200},
+    ]
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rra.cmd_register(comps, "t", "d", only_latest=True)
+    out = buf.getvalue()
+    assert "newest" in out and "skipped" in out, out
+    assert created == ["older"], created
+
+
+def test_latest_stops_when_newest_is_already_registered():
+    """It must not walk back to an older run the user did not ask about."""
+    import contextlib
+    import io
+
+    rra = _load_rra()
+    rra.read_manifest = lambda cid, t, d: {
+        "name": f"HCR_X_unmixed-calibrated_{cid}", "tags": [], "description": "x",
+        "input_assets": {}}
+    rra.asset_exists = lambda n, t, d: n.endswith("newest")
+    created = []
+    rra.create_asset = lambda cid, man, t, d: (
+        created.append(cid) or {"id": "new", "state": "draft"})
+
+    comps = [
+        {"id": "newest", "state": "completed", "end_status": "succeeded", "exit_code": 0,
+         "has_results": True, "created": 300},
+        {"id": "older", "state": "completed", "end_status": "succeeded", "exit_code": 0,
+         "has_results": True, "created": 200},
+    ]
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rra.cmd_register(comps, "t", "d", only_latest=True)
+    assert "already registered" in buf.getvalue()
+    assert created == [], created
+
+
+def test_duplicate_check_fails_closed():
+    """A search failure must abort, not be read as "no duplicate".
+
+    asset_exists is the only thing preventing duplicate assets. If a transient API error
+    returned False, a cron sweep would create one extra asset per pass for as long as the
+    endpoint misbehaved.
+    """
+    import pytest
+
+    rra = _load_rra()
+
+    # A non-dict response (what soft=True used to yield on a 4xx) must raise.
+    rra._api = lambda *a, **k: None
+    with pytest.raises(SystemExit):
+        rra.asset_exists("HCR_X_unmixed-calibrated_2026-01-01_00-00-00", "t", "d")
+
+    # A well-formed empty result is a real "not found" and must return False.
+    rra._api = lambda *a, **k: {"results": [], "has_more": False}
+    assert rra.asset_exists("HCR_X_unmixed-calibrated_2026-01-01_00-00-00", "t", "d") is False
+
+    # An exact name match is found; a near-match is not.
+    name = "HCR_782149_unmixed-calibrated_2026-08-19_07-23-53"
+    rra._api = lambda *a, **k: {"results": [{"name": name}], "has_more": False}
+    assert rra.asset_exists(name, "t", "d") is True
+    rra._api = lambda *a, **k: {"results": [{"name": name + "_v2"}], "has_more": False}
+    assert rra.asset_exists(name, "t", "d") is False

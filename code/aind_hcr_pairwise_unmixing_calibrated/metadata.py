@@ -117,10 +117,21 @@ def derived_data_description(parent_dir, output_dir, process_slug=PROCESS_SLUG,
     now = creation_time or datetime.now(timezone.utc)
     stamp = now.strftime("%Y-%m-%d_%H-%M-%S")
     parent_name = parent.get("name") or Path(parent_dir).name
+    subject = parent.get("subject_id") or ""
+
+    # `name` must match the name the result asset is registered under (see
+    # manifest.asset_name), or the asset record and the metadata inside it disagree and
+    # anything reading AIND metadata programmatically sees two names for one asset.
+    # Keyed on the SUBJECT, not on parent_name: this capsule consumes every round of a
+    # mouse, so naming the asset after one processed session would assert a parentage
+    # that is only one-Nth true. `input_data_name` below still names the parent -- that
+    # field is *about* the parent and stays correct.
+    asset_name = (f"HCR_{subject}_{process_slug}_{stamp}" if subject
+                  else f"{parent_name}_{process_slug}_{stamp}")
 
     doc = dict(parent)                      # inherit unchanged descriptive fields
     doc.update({
-        "name": f"{parent_name}_{process_slug}_{stamp}",
+        "name": asset_name,
         "data_level": "derived",
         "input_data_name": parent_name,
         "process_name": process_slug,

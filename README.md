@@ -310,6 +310,20 @@ Or from a capsule (`code/run_capsule.py`):
 python run_capsule.py --mouse-id 790322
 ```
 
+Everything is written by default. The `--no-*` flags each drop one output:
+
+| flag | drops | cost of dropping it |
+|---|---|---|
+| `--no-spots` | the per-round `*_unmixed_spots.parquet` tables | **Irrecoverable.** These are the only record of the per-spot decisions, and the cell × gene table cannot be rebuilt without them. Saves ~2 GB per 5-round mouse and most of the post-run upload. |
+| `--no-anndata` | `*_cellxgene_annotated.h5ad` and, with it, the plots | Class / subclass / cluster labels. Re-derivable from `*_cellxgene.csv`. |
+| `--no-plots` | `results/plots/` | Nothing — pure re-render from the `.h5ad`. |
+| `--no-metadata` | `processing.json`, `data_description.json`, `asset_manifest.json`, copied schema files | Provenance, and the ability to register the result as an asset. |
+| `--no-fgbg` | the `fg`/`bg` columns in the spot tables | Foreground/background intensities; the unmixing decisions themselves are unaffected. |
+
+Also: `--rounds R2 R3` to restrict rounds, `--processed-folder` to pin which processed
+asset supplies `acquisition.json` and the fg/bg join, and `--experimenter "Your Name"` to
+fill `processor_full_name` in the metadata.
+
 ## Two things worth knowing before you run it
 
 **Laser power must come from each round's own `acquisition.json`.** It varies more than
@@ -349,7 +363,43 @@ standalone.
 
 Written to `/root/capsule/results`. `<M>` is the mouse id, `<R>` the round key.
 
+### At a glance
+
+A five-round mouse produces about **2.1 GB across ~21 files**. Where that goes, from the
+782149 run of 2026-08-19:
+
+| what | files | size | share |
+|---|---|---|---|
+| per-round spot tables | 5 | 2,032 MB | 96.7% |
+| annotated cell × gene (`.h5ad`) | 1 | 6.8 MB | 0.3% |
+| cell × gene table (`.csv`) | 1 | 1.7 MB | 0.08% |
+| QC / audit CSVs | 3 | 10 KB | — |
+| plots | 4 | ~60 MB | 2.9% |
+| metadata JSON + run log | 7 | 190 KB | — |
+
+The spot tables dominate. That is expected — they are one row per detected spot, 2–25 M
+spots per round — and it is why `--no-spots` exists. They are still written by default,
+because they are the only record of what the algorithm decided about each spot.
+
+### Where each file comes from, and what it is for
+
+| file | one row per | produced from | use it to |
+|---|---|---|---|
+| `<M>_<R>_unmixed_spots.parquet` | spot (all of them) | the round's `mixed_spots_<R>.pkl` from the pairwise-unmixing asset, plus fg/bg columns joined from the processed asset's `image_spot_detection/` | **The primary output.** Re-derive the cell × gene table under a different filter, audit an individual spot, or apply a stricter/looser policy than the default without re-running the algorithm. Nothing is deleted — `v3_action` records what a downstream step *should* do, so the raw detections stay auditable. One file per round because a round is 2–25 M spots. |
+| `<M>_cellxgene.csv` | cell | spots where `v3_action == "keep"`, pivoted to cells × `round-channel-gene` and summed, joined across rounds on `cell_id` | Cell typing, clustering, any per-cell analysis. This is the deliverable most downstream work starts from. |
+| `<M>_cellxgene_annotated.h5ad` | cell | the same matrix, plus `annotate.build_anndata()` labels and a depth-normalised layer | The same analyses with class / subclass / named-cluster labels already attached, and normalised counts in a layer. Use in preference to the CSV unless you need something the labelling would get in the way of. |
+| `<M>_spot_change.csv` | round × channel | detection counts before and after the decisions | **Read this first after a run.** A channel losing 90% of its spots, or gaining any, is a red flag. Gene-level percent change per round × channel. |
+| `<M>_decisions.csv` | round × bleed direction | the per-direction decision log | Find out *which* bleed direction moved a gene's count: which β was used and where it came from, the tolerance, how many spots were co-located, deleted, reassigned. |
+| `<M>_separability.csv` | round × direction | the geometry of each channel pair's dye lines | Judge how much to trust a gene before using it. `angle_deg` is the angle between the two dye lines in 5-channel space, `auc` how well the intensity ratio separates the populations, `illcond` flags pairs under 25° where the least-squares test is dropped, `regime` the resulting policy. A small angle with AUC near 0.5 means unmixing had little to work with there, so residual contamination is expected rather than surprising. |
+| `plots/*.png` | — | the annotated `.h5ad`'s own labels | Eyeball the result. Four heatmaps: all cells and inhibitory-only, each in biology-grouped and acquisition (round × channel) gene order. |
+| `processing.json` | — | this run, appended to any upstream `processing.json` found | Provenance: one `DataProcess` with the repo URL and version, input and output locations, run parameters, and spot counts in/out. Accumulates rather than replacing history. |
+| `data_description.json` | — | written fresh from the parent's descriptive fields | Names the asset (`HCR_<subject>_unmixed-calibrated_<timestamp>`), `data_level = "derived"`, `input_data_name` = the parent. |
+| `asset_manifest.json` | — | the mounted asset folders plus the run's own results | What the registered data asset should be called, tagged and described — including every input asset consumed. Consumed by `tools/register_result_asset.py`; see below. |
+| `subject.json`, `acquisition.json`, `procedures.json`, `instrument.json` | — | copied unchanged from the upstream processed asset | Describe the subject and acquisition, which unmixing does not alter. Copied so the derived asset is not orphaned from them. |
+| `output` | — | stdout of the run | The run log: rounds, gene maps, per-round decision counts, the spot-change table, and what was written. First place to look when a run behaved unexpectedly. |
+
 ### Runtime and output size
+
 
 Six rounds of 800995 take about 32 min of unmixing. The wall-clock you see in Code Ocean
 is longer than the script's own timer reports, because **Code Ocean uploads `/results` to
@@ -360,7 +410,8 @@ on a full round-trip. zstd is also marginally faster to write than snappy here, 
 less output means less I/O.
 
 If a run still feels slow after the "all N rounds unmixed" line, the remaining time is
-the upload, not computation. The capsule prints two timings for that stretch: the cell x
+the upload, not computation. `--no-spots` removes almost all of it, at the cost of the
+per-spot decisions. The capsule prints two timings for that stretch: the cell x
 gene shape (under a second) and a cumulative figure at the `.h5ad` write, which was 2s on
 a real run. Benchmarked step by step on the six-round table of 800995:
 
@@ -394,16 +445,6 @@ Labels come from `obs.cluster` rather than being recomputed at plot time. That i
 deliberate: recomputing means re-deriving cluster order from the matrix, and a label frame
 whose row order differs from its cell-id order pairs every label with the wrong cells —
 which looks like randomised data rather than a plotting bug.
-
-| file | one row per | why it exists |
-|---|---|---|
-| `<M>_<R>_unmixed_spots.parquet` | spot (all of them) | **The primary output.** Every input spot survives, annotated with what the algorithm decided and why. Nothing is deleted — `v3_action` says what a downstream step should do. One file per round because a round is 2–25 M spots. |
-| `<M>_cellxgene.csv` | cell | Transcript counts, cells × `round-channel-gene`. Built from spots where `v3_action == "keep"`, joined across rounds on `cell_id`. |
-| `<M>_cellxgene_annotated.h5ad` | cell | The same matrix plus class / subclass / cluster labels and a depth-normalised layer. See below. |
-| `<M>_spot_change.csv` | round × channel | Audit summary: detections in, detections out, percent change. The first thing to read after a run — a channel losing 90% or gaining anything is a red flag. |
-| `<M>_decisions.csv` | round × direction | What happened on each bleed direction: which β was used and where it came from, the tolerance, how many spots were co-located, how many deleted, how many reassigned. This is the file to inspect when a gene's count moves and you want to know which direction did it. |
-| `<M>_separability.csv` | round × direction | **Why it exists:** the algorithm treats a channel pair differently depending on whether its two dye lines are geometrically distinguishable, and this file records that judgement so it is auditable rather than hidden. `angle_deg` is the angle between the two dye lines in 5-channel space; `auc` is how well the intensity ratio separates the two populations; `illcond` flags pairs under 25° where the least-squares test is dropped as uninformative; `regime` is the resulting policy (`delete_and_reassign` when the pair is cleanly separable, `delete_only` otherwise). **Use it to spot trouble before trusting a gene:** a pair with a small angle and an AUC near 0.5 is one where unmixing has the least to work with, so residual contamination there is expected rather than surprising. |
-| `processing.json`, `data_description.json`, and copied `subject.json` / `acquisition.json` / `procedures.json` / `instrument.json` | — | aind-data-schema metadata; see the section below. |
 
 ### The spot table, column by column
 
@@ -593,7 +634,7 @@ The results directory is written as a proper derived asset, not a bare folder of
 - **`data_description.json` is written, not copied.** That file describes the *asset*,
   so copying the parent's would assert that our output is the parent. Following the
   convention the processed assets themselves use, the derived one gets
-  `name = <parent>_unmixed-calibrated_<timestamp>`, `data_level = "derived"`, and
+  `name = HCR_<subject>_unmixed-calibrated_<timestamp>`, `data_level = "derived"`, and
   `input_data_name = <parent>`, while inheriting subject, institution, modality,
   funding and licence unchanged. If no parent `data_description.json` is found, none is
   written — inventing those fields would be worse than omitting the file.
@@ -605,6 +646,15 @@ The results directory is written as a proper derived asset, not a bare folder of
   parameters, and a note with the spot counts in and out. Any upstream
   `processing.json` found is extended rather than replaced, so the processing history
   accumulates.
+
+- **`asset_manifest.json` records what the registered asset should be.** The name
+  (`HCR_<subject>_unmixed-calibrated_<timestamp>`), tags, custom metadata, and a
+  description naming every input data asset the run consumed — split into unmixing input,
+  processed, raw, and a fourth group for assets that were mounted but belong to a
+  different mouse, so the asset never implies they contributed. `data_description.json`
+  and this file share one `creation_time`, so the asset name and the metadata inside the
+  asset agree. Registering the asset from it is a separate step — see
+  [Registering the result as a data asset](#registering-the-result-as-a-data-asset).
 
 Pass `--experimenter "Your Name"` to fill `processor_full_name`, or `--no-metadata` to
 skip the whole step.
@@ -619,6 +669,142 @@ Mixing both shapes in one asset would leave a file neither reader handles cleanl
 referenced in the note rather than downgraded. Migrating to 2.x is a deliberate future
 step for the whole asset at once; `metadata.upgrade_note()` records what it involves,
 and the 2.x construction has been verified to validate under aind-data-schema 2.8.1.
+
+## Registering the result as a data asset
+
+A run leaves a results folder; it does not create a Code Ocean data asset. **The capsule
+cannot register its own result** — Code Ocean uploads `/results` to S3 only *after* the run
+script exits, so while the run is executing there is nothing for an asset to point at, and
+the image carries no Code Ocean client or API token.
+
+So the run writes down what the asset should be (`results/asset_manifest.json`) and
+`tools/register_result_asset.py` creates it afterwards from that manifest. Nothing is
+re-derived by hand: the name, tags, custom metadata and the description naming every input
+asset all come from the run that produced them.
+
+### Setup
+
+```bash
+export CODEOCEAN_DOMAIN=https://codeocean.allenneuraldynamics.org
+export CODEOCEAN_TOKEN=...                                   # data-asset create scope
+export CODEOCEAN_CAPSULE_ID=f8032cb6-1ee2-4273-a847-800079f9177b
+```
+
+Generate the token from your Code Ocean account settings. It is read from the environment
+only — never pass it on the command line or commit it. `CODEOCEAN_CAPSULE_ID` is a default
+for `--capsule`, and only the capsule-wide modes need it.
+
+### Manual
+
+```bash
+# 1. What is there? Registers nothing.
+python tools/register_result_asset.py --list
+
+# 2. Register the run you just did.
+python tools/register_result_asset.py --latest
+
+# 3. Or a specific run, when --latest is not the one you mean.
+python tools/register_result_asset.py 332a1d1e-8bc6-4ff2-aa4c-a6136937f971
+```
+
+`--list` is the one to start with. It prints every computation on the capsule with a status
+and, where it is not ready, the reason:
+
+```
+computation  run (UTC)         status      detail
+332a1d1e     2026-08-19 07:12  ready       HCR_782149_unmixed-calibrated_2026-08-19_07-23-53
+7f4a93ac     2026-08-18 08:00  registered  HCR_782149_unmixed-calibrated_2026-08-18_10-00-00
+ca06b881     2026-08-18 01:53  skip        run failed (exit_code=1) -- a failed run must not become an asset
+ae025867     2026-08-18 00:53  skip        no asset_manifest.json in results -- run predates this feature, or used --no-metadata
+
+1 run(s) ready to register.
+```
+
+`--latest` takes the newest ready run and needs no computation id, which covers the usual
+case of "I just ran the capsule, register that result". Add `--dry-run` to any mode to
+print the name, tags, description and input-asset counts without creating anything.
+
+### Automatic (cron)
+
+```bash
+python tools/register_result_asset.py --watch
+```
+
+One pass: list the capsule's computations, register every ready one, exit. Nothing is
+persisted between passes and nothing is remembered — the check is made fresh against Code
+Ocean each time, so a pass is safe to run whenever.
+
+Put that single-pass form on a schedule. As a crontab entry, every 15 minutes:
+
+```cron
+*/15 * * * * CODEOCEAN_DOMAIN=https://codeocean.allenneuraldynamics.org \
+  CODEOCEAN_TOKEN=... \
+  CODEOCEAN_CAPSULE_ID=f8032cb6-1ee2-4273-a847-800079f9177b \
+  /usr/bin/python3 /path/to/tools/register_result_asset.py --watch \
+  >> /var/log/register_hcr_assets.log 2>&1
+```
+
+Prefer putting the three variables in a file the job sources, rather than inline in the
+crontab where they are readable by anyone who can list it. The same single-pass command
+works unchanged as a scheduled Code Ocean capsule or a GitHub Actions `schedule:` job.
+
+If you would rather have one long-lived process than a scheduler, `--interval` polls in a
+loop:
+
+```bash
+python tools/register_result_asset.py --watch --interval 600     # every 10 min
+```
+
+Both `end_status` and `exit_code` are checked because they mean different things and
+disagree in practice: a run stopped part-way can carry `exit_code=0` with
+`end_status="failed"`, while a script that ran to completion and reported failure carries
+`end_status="succeeded"` with a non-zero `exit_code`. The case `end_status` uniquely
+catches is the first of those *with results present* — the `has_results` check covers it
+otherwise.
+
+**Why a repeated sweep is safe.** The manifest name embeds the run's own UTC timestamp, so
+it is unique per run and doubles as the idempotency key: before creating anything, the
+script searches Code Ocean for an asset of that name and skips the run if one exists. A
+pass that finds nothing new does nothing. Running it every 15 minutes for a month creates
+exactly one asset per successful run.
+
+### What gets skipped, and why
+
+| condition | behaviour |
+|---|---|
+| `end_status != "succeeded"` | skipped — a failed or stopped run must not become an asset |
+| `exit_code != 0` | skipped — same reason; both fields are checked because neither alone is sufficient |
+| `has_results` false | skipped — nothing to capture |
+| no `asset_manifest.json` | skipped — run predates this feature, or used `--no-metadata` |
+| an asset with that name exists | skipped — already registered |
+
+Three failure behaviours worth knowing: the duplicate check **fails closed** (a search API
+error aborts rather than risking a duplicate), naming a computation by hand fetches the full
+record so it cannot bypass the gate, and `--latest` names any runs it passes over rather
+than silently registering an older one.
+
+### The asset it creates
+
+Name: `HCR_<subject>_unmixed-calibrated_<YYYY-MM-DD>_<HH-MM-SS>` (UTC), keyed on the mouse
+rather than a parent session, because the capsule consumes every round of a mouse.
+`data_description.json` inside the asset carries the same name from the same timestamp, so
+the asset record and its own metadata agree.
+
+The description names every input data asset the run consumed, split into unmixing input,
+processed assets, raw acquisition assets, and — separately — any asset that was mounted but
+belongs to a **different mouse**. That last group is stated rather than omitted: such
+assets contribute nothing to the output but are permanently recorded in the computation's
+provenance, and a reader should not have to assume. `run_capsule.py` prints a warning when
+the group is non-empty.
+
+### The structural alternative
+
+A **Code Ocean pipeline** can capture a process's results as a data asset as part of the
+pipeline definition — no external credentials, no polling, and the asset appears as soon as
+the upload completes. If this capsule becomes one step of a pipeline, that is strictly
+better than either mode above and this script becomes unnecessary.
+
+Full detail in [docs/REGISTER_ASSET.md](docs/REGISTER_ASSET.md).
 
 ## Annotated cell × gene table (AnnData)
 
@@ -711,9 +897,13 @@ src/aind_hcr_pairwise_unmixing_calibrated/
     fgbg.py       raw foreground / local background join, and threshold helper
     annotate.py   AnnData with class / subclass / named cluster labels
     metadata.py   aind-data-schema files for the derived asset
+    manifest.py   asset_manifest.json - name/description/tags for the result asset
     pipeline.py   per-round and per-mouse drivers
+tools/
+    register_result_asset.py  create the Code Ocean data asset after a run
 tests/
     test_core.py  synthetic ground truth - ghosts with known identity
 docs/
     unmixing_summary.pdf      plain-language walkthrough, 14 pages
+    REGISTER_ASSET.md         registering results as data assets
 ```
