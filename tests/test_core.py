@@ -1062,3 +1062,127 @@ def test_gate_rejects_stopped_run_that_left_results():
     reason = rra.gate(stopped_with_results)
     assert reason is not None, "a stopped run that left results must not be registered"
     assert "end_status=failed" in reason
+
+
+def _load_rra():
+    import importlib.util
+    from pathlib import Path as _P
+
+    here = _P(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_rra_mod", here / "tools" / "register_result_asset.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_manual_mode_does_not_bypass_the_gate():
+    """A bare {"id": ...} record passes every check vacuously.
+
+    gate() reads state/end_status/exit_code/has_results off the computation record, so
+    naming a computation on the command line must fetch the real record rather than
+    fabricate one from the id -- otherwise `register_result_asset.py <failed_run_id>`
+    would register a failed run.
+    """
+    rra = _load_rra()
+    assert rra.gate({"id": "whatever"}) is None, "bare record is vacuously acceptable"
+    assert hasattr(rra, "get_computation"), "manual mode needs a record fetch"
+
+    fetched = {}
+
+    def fake_api(path, token, domain, method="GET", body=None, params=None, soft=False):
+        fetched["path"] = path
+        return {"id": "d20036dc", "state": "completed", "end_status": "succeeded",
+                "exit_code": 1, "has_results": False}
+
+    rra._api = fake_api
+    comp = rra.get_computation("d20036dc", "t", "d")
+    assert fetched["path"] == "computations/d20036dc"
+    assert "exit_code=1" in rra.gate(comp), "the fetched record must be gated"
+
+
+def test_latest_reports_runs_it_passes_over():
+    """--latest must name what it skipped, not silently register an older run.
+
+    Registering an older run while saying nothing about the newest one reads as success
+    for the run the user just did.
+    """
+    import contextlib
+    import io
+
+    rra = _load_rra()
+    rra.read_manifest = lambda cid, t, d: {
+        "name": f"HCR_X_unmixed-calibrated_{cid}", "tags": [], "description": "x",
+        "input_assets": {}}
+    rra.asset_exists = lambda n, t, d: False
+    created = []
+    rra.create_asset = lambda cid, man, t, d: (
+        created.append(cid) or {"id": "new", "state": "draft"})
+
+    comps = [
+        {"id": "newest", "state": "completed", "end_status": "failed", "exit_code": 0,
+         "has_results": False, "created": 300},
+        {"id": "older", "state": "completed", "end_status": "succeeded", "exit_code": 0,
+         "has_results": True, "created": 200},
+    ]
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rra.cmd_register(comps, "t", "d", only_latest=True)
+    out = buf.getvalue()
+    assert "newest" in out and "skipped" in out, out
+    assert created == ["older"], created
+
+
+def test_latest_stops_when_newest_is_already_registered():
+    """It must not walk back to an older run the user did not ask about."""
+    import contextlib
+    import io
+
+    rra = _load_rra()
+    rra.read_manifest = lambda cid, t, d: {
+        "name": f"HCR_X_unmixed-calibrated_{cid}", "tags": [], "description": "x",
+        "input_assets": {}}
+    rra.asset_exists = lambda n, t, d: n.endswith("newest")
+    created = []
+    rra.create_asset = lambda cid, man, t, d: (
+        created.append(cid) or {"id": "new", "state": "draft"})
+
+    comps = [
+        {"id": "newest", "state": "completed", "end_status": "succeeded", "exit_code": 0,
+         "has_results": True, "created": 300},
+        {"id": "older", "state": "completed", "end_status": "succeeded", "exit_code": 0,
+         "has_results": True, "created": 200},
+    ]
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rra.cmd_register(comps, "t", "d", only_latest=True)
+    assert "already registered" in buf.getvalue()
+    assert created == [], created
+
+
+def test_duplicate_check_fails_closed():
+    """A search failure must abort, not be read as "no duplicate".
+
+    asset_exists is the only thing preventing duplicate assets. If a transient API error
+    returned False, a cron sweep would create one extra asset per pass for as long as the
+    endpoint misbehaved.
+    """
+    import pytest
+
+    rra = _load_rra()
+
+    # A non-dict response (what soft=True used to yield on a 4xx) must raise.
+    rra._api = lambda *a, **k: None
+    with pytest.raises(SystemExit):
+        rra.asset_exists("HCR_X_unmixed-calibrated_2026-01-01_00-00-00", "t", "d")
+
+    # A well-formed empty result is a real "not found" and must return False.
+    rra._api = lambda *a, **k: {"results": [], "has_more": False}
+    assert rra.asset_exists("HCR_X_unmixed-calibrated_2026-01-01_00-00-00", "t", "d") is False
+
+    # An exact name match is found; a near-match is not.
+    name = "HCR_782149_unmixed-calibrated_2026-08-19_07-23-53"
+    rra._api = lambda *a, **k: {"results": [{"name": name}], "has_more": False}
+    assert rra.asset_exists(name, "t", "d") is True
+    rra._api = lambda *a, **k: {"results": [{"name": name + "_v2"}], "has_more": False}
+    assert rra.asset_exists(name, "t", "d") is False

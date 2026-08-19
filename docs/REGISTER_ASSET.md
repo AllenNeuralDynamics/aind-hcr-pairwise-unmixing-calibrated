@@ -73,6 +73,24 @@ python tools/register_result_asset.py --watch --interval 600  # keep polling
 
 Put the single-pass form in cron, a scheduled capsule, or a GitHub Actions schedule.
 
+### Failure behaviour
+
+Three deliberate choices, each found by auditing the script rather than by running it:
+
+- **The duplicate check fails closed.** `asset_exists()` is the only thing preventing
+  duplicate assets, so a transient `data_assets/search` failure aborts rather than being
+  read as "no duplicate found". Failing open would let a cron sweep create one extra asset
+  per pass for as long as the endpoint misbehaved.
+- **Naming a computation by hand does not bypass the safety gate.** `gate()` reads
+  `state` / `end_status` / `exit_code` / `has_results` off the computation record, and a
+  record holding only an id passes every check vacuously. Manual mode therefore fetches the
+  full record (`GET computations/<id>`) before gating, so
+  `register_result_asset.py <failed_run_id>` refuses rather than registering a failed run.
+- **`--latest` names the runs it passes over.** It means "the newest run that *can* be
+  registered", which is not always the newest run. Registering an older run silently would
+  read as success for the run you just did. If the newest run is already registered it stops
+  there rather than walking back.
+
 ### Code Ocean pipeline (the structural alternative)
 
 A pipeline can capture a process's results as a data asset as part of the pipeline

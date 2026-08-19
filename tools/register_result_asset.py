@@ -93,6 +93,21 @@ def list_computations(capsule_id, token, domain):
     return [c for c in (r or []) if isinstance(c, dict)]
 
 
+def get_computation(computation_id, token, domain):
+    """Fetch one computation record.
+
+    Needed because gate() reads state/end_status/exit_code/has_results off the record: an
+    id alone carries none of those, and a dict holding only {"id": ...} passes every check
+    vacuously. Naming a computation by hand must not be a way around the safety gate.
+    """
+    r = _api(f"computations/{computation_id}", token, domain)
+    if isinstance(r, list):
+        r = r[0] if r else {}
+    if not isinstance(r, dict) or not r.get("id"):
+        raise SystemExit(f"computation {computation_id} not found")
+    return r
+
+
 def read_manifest(computation_id, token, domain):
     """results/asset_manifest.json from a finished computation, or None.
 
@@ -113,9 +128,19 @@ def read_manifest(computation_id, token, domain):
 
 
 def asset_exists(name, token, domain):
+    """True when an asset with exactly this name is already registered.
+
+    Deliberately NOT soft: this is the only thing preventing duplicate assets, so a
+    transient search failure must abort the run rather than be read as "no duplicate
+    found". Failing open here would let a cron sweep create one extra asset per pass for
+    as long as the search endpoint misbehaves.
+    """
     r = _api("data_assets/search", token, domain, method="POST",
-             body={"query": f'name:"{name}"', "limit": 50}, soft=True)
-    items = (r or {}).get("results") or (r or {}).get("items") or []
+             body={"query": f'name:"{name}"', "limit": 50})
+    if not isinstance(r, dict):
+        raise SystemExit(f"unexpected data_assets/search response for {name!r}: "
+                         f"{type(r).__name__} -- refusing to create a possible duplicate")
+    items = r.get("results") or r.get("items") or []
     # Compact search results use "n" for name; full records use "name".
     return any((it.get("name") or it.get("n")) == name for it in items)
 
@@ -205,6 +230,13 @@ def cmd_list(comps, token, domain):
 
 
 def cmd_register(comps, token, domain, dry_run=False, only_latest=False):
+    """Register ready runs. only_latest stops at the newest ready one.
+
+    --latest means "the newest run that can be registered", which is not always the newest
+    run. When runs are passed over on the way there, each is named with its reason: silently
+    registering an older run while the newest one failed would read as success for the run
+    the user just did.
+    """
     ordered = sorted(comps, key=lambda z: z.get("created", 0), reverse=True)
     todo = []
     for c in ordered:
@@ -213,13 +245,13 @@ def cmd_register(comps, token, domain, dry_run=False, only_latest=False):
             todo.append((c, man))
             if only_latest:
                 break
-        elif not only_latest:
-            print(f"{c['id'][:8]}  skipped      {detail}")
-        elif status == "registered":
-            # --latest: the newest run is already done; say so rather than walking back
-            # to an older one the user did not ask about.
+        elif status == "registered" and only_latest:
+            # Stop rather than walking back: the newest run is accounted for, and an older
+            # one is not what --latest was asked to do.
             print(f"{c['id'][:8]}  already registered as {detail}")
             return 0
+        else:
+            print(f"{c['id'][:8]}  skipped      {detail}")
     if not todo:
         print("nothing to register.")
         return 0
@@ -278,7 +310,8 @@ def main(argv=None):
 
     def fetch():
         if args.computation_id:
-            return [{"id": args.computation_id}]
+            # The full record, not just the id: gate() has nothing to check otherwise.
+            return [get_computation(args.computation_id, token, domain)]
         return list_computations(args.capsule, token, domain)
 
     if args.list:

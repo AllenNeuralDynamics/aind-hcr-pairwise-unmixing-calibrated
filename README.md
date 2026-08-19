@@ -778,6 +778,11 @@ exactly one asset per successful run.
 | no `asset_manifest.json` | skipped — run predates this feature, or used `--no-metadata` |
 | an asset with that name exists | skipped — already registered |
 
+Three failure behaviours worth knowing: the duplicate check **fails closed** (a search API
+error aborts rather than risking a duplicate), naming a computation by hand fetches the full
+record so it cannot bypass the gate, and `--latest` names any runs it passes over rather
+than silently registering an older one.
+
 ### The asset it creates
 
 Name: `HCR_<subject>_unmixed-calibrated_<YYYY-MM-DD>_<HH-MM-SS>` (UTC), keyed on the mouse
