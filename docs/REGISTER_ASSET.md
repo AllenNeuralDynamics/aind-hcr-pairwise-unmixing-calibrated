@@ -24,6 +24,12 @@ Splits the job at the boundary where it naturally falls.
    finishes. It reads the manifest from the completed computation and POSTs
    `/api/v1/data_assets` with `source.computation.id` — no values re-derived by hand.
 
+**Run these from `/root/capsule/code`**, which is where a Code Ocean terminal opens.
+The script lives at `code/tools/register_result_asset.py` — inside `code/` rather than
+at the repo root, for two reasons: that is the directory the terminal starts in, and it
+is the subtree Code Ocean is guaranteed to materialise. A repo-root `tools/` sorts last
+alphabetically, so a checkout that aborts partway drops it silently.
+
 ```bash
 export CODEOCEAN_DOMAIN=https://codeocean.allenneuraldynamics.org
 export CODEOCEAN_TOKEN=...        # needs data-asset create scope

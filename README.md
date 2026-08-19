@@ -696,6 +696,12 @@ for `--capsule`, and only the capsule-wide modes need it.
 
 ### Manual
 
+**Run these from `/root/capsule/code`**, which is where a Code Ocean terminal opens.
+The script lives at `code/tools/register_result_asset.py` — inside `code/` rather than
+at the repo root, for two reasons: that is the directory the terminal starts in, and it
+is the subtree Code Ocean is guaranteed to materialise. A repo-root `tools/` sorts last
+alphabetically, so a checkout that aborts partway drops it silently.
+
 ```bash
 # 1. What is there? Registers nothing.
 python tools/register_result_asset.py --list

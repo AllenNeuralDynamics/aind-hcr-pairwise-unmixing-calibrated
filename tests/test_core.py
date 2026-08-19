@@ -1055,7 +1055,7 @@ def test_gate_rejects_both_kinds_of_failure():
 
     here = _P(__file__).resolve().parent.parent
     spec = importlib.util.spec_from_file_location(
-        "_rra", here / "tools" / "register_result_asset.py")
+        "_rra", here / "code" / "tools" / "register_result_asset.py")
     rra = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(rra)
 
@@ -1082,7 +1082,7 @@ def test_results_url_route_matches_official_client():
     from pathlib import Path as _P
 
     src = (_P(__file__).resolve().parent.parent
-           / "tools" / "register_result_asset.py").read_text()
+           / "code" / "tools" / "register_result_asset.py").read_text()
     # Only _api() call sites count; the deprecated route is named in a comment on
     # purpose, to say why it is not used.
     calls = [ln for ln in src.splitlines()
@@ -1104,7 +1104,7 @@ def test_gate_rejects_stopped_run_that_left_results():
 
     here = _P(__file__).resolve().parent.parent
     spec = importlib.util.spec_from_file_location(
-        "_rra2", here / "tools" / "register_result_asset.py")
+        "_rra2", here / "code" / "tools" / "register_result_asset.py")
     rra = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(rra)
 
@@ -1121,7 +1121,7 @@ def _load_rra():
 
     here = _P(__file__).resolve().parent.parent
     spec = importlib.util.spec_from_file_location(
-        "_rra_mod", here / "tools" / "register_result_asset.py")
+        "_rra_mod", here / "code" / "tools" / "register_result_asset.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
