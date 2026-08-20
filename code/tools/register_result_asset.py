@@ -210,11 +210,21 @@ def asset_exists(name, token, domain):
 #: Where a registered asset's files come to rest. WITHOUT a target, Code Ocean copies the
 #: results into its own internal storage; WITH one, the asset is "external" and its files
 #: live in this bucket -- which is where every other AIND asset lives, and what docDB and
-#: the data portal read. Confirmed against an existing asset of this exact kind (0781242a,
-#: registered by hand): source_bucket = {origin: aws, bucket: aind-open-data,
-#: prefix: cell-types-and-learning-data, external: true}.
+#: the data portal read.
 DEFAULT_TARGET_BUCKET = "aind-open-data"
-DEFAULT_TARGET_PREFIX = "cell-types-and-learning-data"
+
+#: The prefix defaults to the ASSET'S OWN NAME, giving it a private folder. This is the
+#: convention the bucket already follows: aind-open-data holds one top-level folder per
+#: asset, named exactly as the asset (e.g. HCR_800995_pairwise-unmixing_2026-06-29_17-49-24).
+#:
+#: It must NOT default to a shared project folder. Registering into
+#: `cell-types-and-learning-data` produced an asset that claimed every object already in
+#: that folder: six `*_cell_typing_table.csv` files for OTHER mice (782149, 788406, 790322,
+#: 800792, 800995, 804363), written 2026-07-08, six weeks before the run. The asset reported
+#: 60 files / 2.10 GB, which is exactly the whole folder -- an external asset is a POINTER
+#: to a prefix, so it owns whatever else lives there, and cross-subject files in a
+#: single-subject asset are a provenance error, not clutter.
+DEFAULT_TARGET_PREFIX = None      # None -> use the asset name from the manifest
 
 
 def create_asset(computation_id, manifest, token, domain, bucket=None, prefix=None):
@@ -229,7 +239,8 @@ def create_asset(computation_id, manifest, token, domain, bucket=None, prefix=No
     bucket = DEFAULT_TARGET_BUCKET if bucket is None else bucket
     if bucket:
         aws = {"bucket": bucket}
-        pfx = DEFAULT_TARGET_PREFIX if prefix is None else prefix
+        # None -> the asset's own name, so the asset owns exactly its own files.
+        pfx = (manifest["name"] if prefix is None else prefix)
         if pfx:
             aws["prefix"] = pfx
         body["target"] = {"aws": aws}
@@ -386,8 +397,8 @@ def cmd_register(comps, token, domain, dry_run=False, only_latest=False,
             print("  input assets: " + ", ".join(
                 f"{k}={len(v)}" for k, v in inputs.items() if v))
         dest = DEFAULT_TARGET_BUCKET if bucket is None else bucket
-        pfx = DEFAULT_TARGET_PREFIX if prefix is None else prefix
-        print(f"  target : s3://{dest}/{pfx}  (external asset)" if dest
+        pfx = man["name"] if prefix is None else prefix
+        print(f"  target : s3://{dest}/{pfx}  (external asset, own folder)" if dest
               else "  target : Code Ocean internal storage (NOT aind-open-data)")
         if dry_run:
             print("  --dry-run: not created")
@@ -424,7 +435,8 @@ def main(argv=None):
                     help="external S3 bucket holding the asset's files "
                          f"(default {DEFAULT_TARGET_BUCKET})")
     ap.add_argument("--prefix", default=None,
-                    help=f"folder within that bucket (default {DEFAULT_TARGET_PREFIX})")
+                    help="folder within that bucket (default: the asset's own name, so it "
+                         "does not share a folder with anything else)")
     ap.add_argument("--internal", action="store_true",
                     help="store files in Code Ocean's own storage instead of S3")
     args = ap.parse_args(argv)

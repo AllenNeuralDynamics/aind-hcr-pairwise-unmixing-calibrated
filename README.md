@@ -699,10 +699,18 @@ for `--capsule`, and only the capsule-wide modes need it.
 **Run these from `/root/capsule/code`**, which is where a Code Ocean terminal opens.
 
 **Where the files land.** The asset is created as an *external* asset on
-`s3://aind-open-data/cell-types-and-learning-data`, matching every other AIND asset —
-so docDB and the data portal can see it. This comes from a `target.aws` block in the
-create request; without it Code Ocean would copy the results into its own internal
-storage instead. `--dry-run` prints the destination before anything is created.
+`s3://aind-open-data/<asset name>` — its own top-level folder, which is the convention
+the bucket already follows (one folder per asset, named as the asset). This comes from a
+`target.aws` block in the create request; without it Code Ocean copies the results into
+its own internal storage, where docDB and the data portal cannot see them.
+
+**The prefix must not be a shared folder.** An external asset is a *pointer* to a
+prefix, not a copy of named files, so it owns everything living under that prefix.
+Registering into the shared `cell-types-and-learning-data` folder produced an asset that
+claimed six `*_cell_typing_table.csv` files belonging to other mice, written six weeks
+earlier — 60 files and 2.10 GB, the entire folder. `--dry-run` prints the exact
+destination; check it names the asset, not a project folder.
+
 Override with `--bucket` / `--prefix`, or use `--internal` for Code Ocean storage.
 
 **If the API token is already attached to the capsule as a secret, no export is needed.**

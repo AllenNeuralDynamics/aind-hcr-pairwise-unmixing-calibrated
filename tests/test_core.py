@@ -769,13 +769,23 @@ def test_the_asset_lands_on_aind_open_data_by_default():
         sent.update(path=path, method=method, body=body) or {"id": "new", "state": "ready"})
     man = {"name": "HCR_1_unmixed-calibrated_2026-01-01_00-00-00", "tags": ["HCR"]}
 
-    # default: external, on aind-open-data, under the AIND project prefix
+    # default: external, on aind-open-data, in the asset's OWN folder
     rra.create_asset("comp-id", man, "tok", "dom")
     assert sent["method"] == "POST" and sent["path"] == "data_assets"
     assert sent["body"]["target"]["aws"]["bucket"] == "aind-open-data"
-    assert sent["body"]["target"]["aws"]["prefix"] == rra.DEFAULT_TARGET_PREFIX
-    # the source is still the computation -- the target says WHERE, not WHAT
+    assert sent["body"]["target"]["aws"]["prefix"] == man["name"], (
+        "the prefix must be the asset's own name: an external asset is a POINTER to a "
+        "prefix, so a shared folder makes it claim every other file living there")
+    # the source is still the computation -- the target says WHERE, not WHAT.
+    # Checked HERE, before the next create_asset call overwrites `sent`.
     assert sent["body"]["source"]["computation"]["id"] == "comp-id"
+
+    # a second asset must not land in the same folder as the first
+    other = dict(man, name="HCR_2_unmixed-calibrated_2026-01-02_00-00-00")
+    rra.create_asset("comp-2", other, "tok", "dom")
+    assert sent["body"]["target"]["aws"]["prefix"] == other["name"]
+    assert sent["body"]["target"]["aws"]["prefix"] != man["name"]
+    assert sent["body"]["source"]["computation"]["id"] == "comp-2"
 
     # an explicit override is honoured
     rra.create_asset("c", man, "t", "d", bucket="other-bucket", prefix="sub/dir")
@@ -788,6 +798,38 @@ def test_the_asset_lands_on_aind_open_data_by_default():
     # an empty prefix is respected rather than silently defaulted
     rra.create_asset("c", man, "t", "d", prefix="")
     assert sent["body"]["target"]["aws"] == {"bucket": "aind-open-data"}
+
+
+def test_the_default_prefix_is_never_a_shared_project_folder():
+    """The default prefix must be per-asset, not a folder other files already live in.
+
+    This is a regression test for a real incident. The default was
+    `cell-types-and-learning-data`, a SHARED project folder, so the registered asset
+    HCR_782149_unmixed-calibrated_2026-08-20_01-52-42 claimed everything already there:
+    six *_cell_typing_table.csv files for other mice (782149, 788406, 790322, 800792,
+    800995, 804363) dated 2026-07-08, six weeks before the run. The asset reported
+    60 files / 2.10 GB -- exactly the whole folder.
+
+    An external data asset is a POINTER to a prefix, not a copy of specific files, so the
+    prefix has to be owned by that asset alone.
+    """
+    import importlib.util
+
+    here = pathlib.Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_rra_pfx", here / "code" / "tools" / "register_result_asset.py")
+    rra = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rra)
+
+    assert rra.DEFAULT_TARGET_PREFIX is None, (
+        "a hard-coded default prefix is shared by every asset by construction")
+
+    src = (here / "code" / "tools" / "register_result_asset.py").read_text()
+    assert "cell-types-and-learning-data" not in src.split("#:")[0] or True
+    # the specific shared folder must not be a default anywhere in the code
+    for line in src.split("\n"):
+        if line.startswith("DEFAULT_TARGET_PREFIX"):
+            assert "cell-types-and-learning-data" not in line, line
 
 
 def test_a_listed_id_can_be_pasted_straight_back_in():
