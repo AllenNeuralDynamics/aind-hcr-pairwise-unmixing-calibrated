@@ -14,6 +14,33 @@ from aind_hcr_pairwise_unmixing_calibrated.control import CHANS, control_matrix
 RNG = np.random.RandomState(0)
 
 
+
+# ---------------------------------------------------------------------------------------
+# Verifying a guard is not vacuous
+#
+# Several tests here exist to catch one specific regression, and a test that would pass
+# even with the bug reintroduced is worse than no test. The check is to reintroduce the
+# bug and confirm THIS test fails:
+#
+#     pip install -e .        # REQUIRED FIRST -- see below
+#     <apply the mutation>
+#     python -m pytest tests/test_core.py::<the_test> -q
+#
+# The install step is not optional and the failure mode is subtle: this module imports
+# aind_hcr_pairwise_unmixing_calibrated at module level, so if the package is not
+# installed, EVERY node-id in this file fails at collection with ModuleNotFoundError --
+# which looks exactly like the guard firing. A non-zero exit is therefore not evidence on
+# its own. Distinguish them:
+#
+#     "error during collection" / ModuleNotFoundError  -> invalid check, install and retry
+#     "AssertionError" / "KeyError" from the test body -> the guard genuinely fired
+#
+# This bit once: a vacuity check was run in the same shell as an uninstalled-package test
+# run, reported "guard works", and was written into a commit message. The guard turned out
+# to be sound, but the check that claimed it had proved nothing.
+# ---------------------------------------------------------------------------------------
+
+
 def make_round(n_real=4000, n_ghost=1200, beta=0.45, source="594", victim="561",
                bright=(80, 400), noise=8.0):
     """A round where every ghost is known.
