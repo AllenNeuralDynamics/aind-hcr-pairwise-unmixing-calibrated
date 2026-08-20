@@ -26,6 +26,13 @@ Splits the job at the boundary where it naturally falls.
 
 **Run these from `/root/capsule/code`**, which is where a Code Ocean terminal opens.
 
+**Where the files land.** The asset is created as an *external* asset on
+`s3://aind-open-data/cell-types-and-learning-data`, matching every other AIND asset —
+so docDB and the data portal can see it. This comes from a `target.aws` block in the
+create request; without it Code Ocean would copy the results into its own internal
+storage instead. `--dry-run` prints the destination before anything is created.
+Override with `--bucket` / `--prefix`, or use `--internal` for Code Ocean storage.
+
 **If the API token is already attached to the capsule as a secret, no export is needed.**
 An attached api-key secret arrives under the field names in `.codeocean/secrets.json` —
 `API_KEY` and `API_SECRET` here — and the script reads those directly, checking

@@ -717,6 +717,52 @@ def test_every_import_is_declared_in_the_environment():
         f"declared: {sorted(declared)}")
 
 
+def test_the_asset_lands_on_aind_open_data_by_default():
+    """A registered asset must be EXTERNAL, on aind-open-data, like every other AIND asset.
+
+    Without a `target` in the create body, Code Ocean copies the results into its own
+    internal storage. The existing hand-registered asset of this kind (0781242a) carries
+    source_bucket = {origin: aws, bucket: aind-open-data,
+    prefix: cell-types-and-learning-data, external: true}, so a script-registered asset
+    must match -- otherwise the same pipeline produces assets in two different places and
+    only some of them are visible to docDB and the data portal.
+    """
+    import importlib.util
+
+    here = pathlib.Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_rra_target", here / "code" / "tools" / "register_result_asset.py")
+    rra = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rra)
+
+    assert rra.DEFAULT_TARGET_BUCKET == "aind-open-data"
+
+    sent = {}
+    rra._api = lambda path, token, domain, method="GET", body=None, **k: (
+        sent.update(path=path, method=method, body=body) or {"id": "new", "state": "ready"})
+    man = {"name": "HCR_1_unmixed-calibrated_2026-01-01_00-00-00", "tags": ["HCR"]}
+
+    # default: external, on aind-open-data, under the AIND project prefix
+    rra.create_asset("comp-id", man, "tok", "dom")
+    assert sent["method"] == "POST" and sent["path"] == "data_assets"
+    assert sent["body"]["target"]["aws"]["bucket"] == "aind-open-data"
+    assert sent["body"]["target"]["aws"]["prefix"] == rra.DEFAULT_TARGET_PREFIX
+    # the source is still the computation -- the target says WHERE, not WHAT
+    assert sent["body"]["source"]["computation"]["id"] == "comp-id"
+
+    # an explicit override is honoured
+    rra.create_asset("c", man, "t", "d", bucket="other-bucket", prefix="sub/dir")
+    assert sent["body"]["target"]["aws"] == {"bucket": "other-bucket", "prefix": "sub/dir"}
+
+    # empty bucket means internal storage: no target at all, rather than a blank one
+    rra.create_asset("c", man, "t", "d", bucket="")
+    assert "target" not in sent["body"]
+
+    # an empty prefix is respected rather than silently defaulted
+    rra.create_asset("c", man, "t", "d", prefix="")
+    assert sent["body"]["target"]["aws"] == {"bucket": "aind-open-data"}
+
+
 def test_a_listed_id_can_be_pasted_straight_back_in():
     """Whatever --list prints must be a usable argument.
 
@@ -1335,7 +1381,7 @@ def test_latest_reports_runs_it_passes_over():
         "input_assets": {}}
     rra.asset_exists = lambda n, t, d: False
     created = []
-    rra.create_asset = lambda cid, man, t, d: (
+    rra.create_asset = lambda cid, man, t, d, bucket=None, prefix=None: (
         created.append(cid) or {"id": "new", "state": "draft"})
 
     comps = [
@@ -1363,7 +1409,7 @@ def test_latest_stops_when_newest_is_already_registered():
         "input_assets": {}}
     rra.asset_exists = lambda n, t, d: n.endswith("newest")
     created = []
-    rra.create_asset = lambda cid, man, t, d: (
+    rra.create_asset = lambda cid, man, t, d, bucket=None, prefix=None: (
         created.append(cid) or {"id": "new", "state": "draft"})
 
     comps = [

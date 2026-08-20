@@ -207,7 +207,17 @@ def asset_exists(name, token, domain):
     return any((it.get("name") or it.get("n")) == name for it in items)
 
 
-def create_asset(computation_id, manifest, token, domain):
+#: Where a registered asset's files come to rest. WITHOUT a target, Code Ocean copies the
+#: results into its own internal storage; WITH one, the asset is "external" and its files
+#: live in this bucket -- which is where every other AIND asset lives, and what docDB and
+#: the data portal read. Confirmed against an existing asset of this exact kind (0781242a,
+#: registered by hand): source_bucket = {origin: aws, bucket: aind-open-data,
+#: prefix: cell-types-and-learning-data, external: true}.
+DEFAULT_TARGET_BUCKET = "aind-open-data"
+DEFAULT_TARGET_PREFIX = "cell-types-and-learning-data"
+
+
+def create_asset(computation_id, manifest, token, domain, bucket=None, prefix=None):
     body = {
         "name": manifest["name"],
         "mount": manifest.get("mount", manifest["name"]),
@@ -215,6 +225,14 @@ def create_asset(computation_id, manifest, token, domain):
         "description": manifest.get("description", ""),
         "source": {"computation": {"id": computation_id}},
     }
+    # An empty-string bucket means "internal" explicitly; None means "use the default".
+    bucket = DEFAULT_TARGET_BUCKET if bucket is None else bucket
+    if bucket:
+        aws = {"bucket": bucket}
+        pfx = DEFAULT_TARGET_PREFIX if prefix is None else prefix
+        if pfx:
+            aws["prefix"] = pfx
+        body["target"] = {"aws": aws}
     if manifest.get("custom_metadata"):
         body["custom_metadata"] = manifest["custom_metadata"]
     return _api("data_assets", token, domain, method="POST", body=body)
@@ -330,7 +348,8 @@ def cmd_list(comps, token, domain):
     return 0
 
 
-def cmd_register(comps, token, domain, dry_run=False, only_latest=False):
+def cmd_register(comps, token, domain, dry_run=False, only_latest=False,
+                 bucket=None, prefix=None):
     """Register ready runs. only_latest stops at the newest ready one.
 
     --latest means "the newest run that can be registered", which is not always the newest
@@ -366,10 +385,15 @@ def cmd_register(comps, token, domain, dry_run=False, only_latest=False):
         if inputs:
             print("  input assets: " + ", ".join(
                 f"{k}={len(v)}" for k, v in inputs.items() if v))
+        dest = DEFAULT_TARGET_BUCKET if bucket is None else bucket
+        pfx = DEFAULT_TARGET_PREFIX if prefix is None else prefix
+        print(f"  target : s3://{dest}/{pfx}  (external asset)" if dest
+              else "  target : Code Ocean internal storage (NOT aind-open-data)")
         if dry_run:
             print("  --dry-run: not created")
             continue
-        asset = create_asset(c["id"], man, token, domain)
+        asset = create_asset(c["id"], man, token, domain,
+                             bucket=bucket, prefix=prefix)
         print(f"  created data asset {asset.get('id')}  state={asset.get('state')}")
     return 0
 
@@ -396,6 +420,13 @@ def main(argv=None):
                     help="with --watch, keep polling every SEC seconds")
     ap.add_argument("--dry-run", action="store_true",
                     help="print what would be created, create nothing")
+    ap.add_argument("--bucket", default=None,
+                    help="external S3 bucket holding the asset's files "
+                         f"(default {DEFAULT_TARGET_BUCKET})")
+    ap.add_argument("--prefix", default=None,
+                    help=f"folder within that bucket (default {DEFAULT_TARGET_PREFIX})")
+    ap.add_argument("--internal", action="store_true",
+                    help="store files in Code Ocean's own storage instead of S3")
     args = ap.parse_args(argv)
 
     domain, domain_src = _first_env(DOMAIN_VARS)
@@ -425,11 +456,13 @@ def main(argv=None):
     if args.list:
         return cmd_list(fetch(), token, domain)
 
+    bucket = "" if args.internal else args.bucket
     rc = cmd_register(fetch(), token, domain, dry_run=args.dry_run,
-                      only_latest=args.latest)
+                      only_latest=args.latest, bucket=bucket, prefix=args.prefix)
     while args.watch and args.interval:
         time.sleep(args.interval)
-        rc = cmd_register(fetch(), token, domain, dry_run=args.dry_run)
+        rc = cmd_register(fetch(), token, domain, dry_run=args.dry_run,
+                          bucket=bucket, prefix=args.prefix)
     return rc
 
 
