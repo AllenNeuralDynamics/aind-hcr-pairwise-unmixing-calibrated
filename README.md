@@ -378,7 +378,16 @@ unchanged; what changed is how the annotated `.h5ad` is labelled.
 
 The rules come from `matchings/hcr-inhibitory-consensus-capsule` (`code/PROTOCOL.md`)
 and are vendored in `labeling.py`, with the published constants copied rather than
-re-derived. Two parts of that protocol are **not** here: the ROI quality filter, which
+re-derived.
+
+**No new inputs.** What was taken from the cohort work is source code and constants, not
+data: `labeling.py` reads no files, and the capsule's mounts are unchanged — it still
+derives every label from the same per-mouse assets it always had. There is no reference
+centroid table, no cohort label file, and no dependency on the cohort run having been
+done. That is also the limit of the correspondence: the per-cell rules match the
+cohort's exactly, while the clusters are fitted here and are this mouse's own.
+
+Two parts of that protocol are **not** here: the ROI quality filter, which
 needs the per-mouse `HCR-ROI-label` asset this capsule does not mount, and the depth
 proxy, which needs a cell z column. The cohort run applies the ROI filter before its
 class call, so it reports a smaller ambiguous fraction on the same animal than this
@@ -545,8 +554,8 @@ handful of cells the same weight as one carrying real structure.
 
 | column | meaning |
 |---|---|
-| `class` | `inhibitory` / `excitatory` / `ambiguous` / `low_counts`, from a two-component Gaussian mixture on log2((Gad2+1)/(Slc17a7+1)) cut at posterior 0.90 and 0.10. Cells below 100 total counts are `low_counts` and take no part in the fit. A mixture rather than fixed per-marker thresholds: the boundary is set by the data's own two modes, so it tracks a mouse's detection depth instead of being calibrated on one animal and carried to the rest. Cells between the gates are `ambiguous` — around 1% in the cohort, and not a thresholding artefact: the fraction barely moves when the mixture is refitted per mouse and does not fall with library size |
-| `subclass` | `Pvalb` / `Sst` / `Vip` / `Lamp5` / `unassigned`, a **per-cell** call: whichever of the four markers carries the most **raw counts**, with a winner below 20 counts returning `unassigned`. On raw counts, not the transform — the p95 stage makes Lamp5 render about 3× darker than Sst at equal counts and moves the call. `none` on cells the class call did not place in the inhibitory class |
+| `class` | `inhibitory` / `excitatory` / `ambiguous` / `low_counts` — plus `unassigned` in the one degenerate case below, where a marker's round is absent and no call is possible at all. From a two-component Gaussian mixture on log2((Gad2+1)/(Slc17a7+1)) cut at posterior 0.90 and 0.10. Cells below 100 total counts are `low_counts` and take no part in the fit. A mixture rather than fixed per-marker thresholds: the boundary is set by the data's own two modes, so it tracks a mouse's detection depth instead of being calibrated on one animal and carried to the rest. Cells between the gates are `ambiguous` — around 1% in the cohort, and not a thresholding artefact: the fraction barely moves when the mixture is refitted per mouse and does not fall with library size |
+| `subclass` | `Pvalb` / `Sst` / `Vip` / `Lamp5` / `unassigned` / `none`, a **per-cell** call: whichever of the four markers carries the most **raw counts**, with a winner below 20 counts returning `unassigned`. On raw counts, not the transform — the p95 stage makes Lamp5 render about 3× darker than Sst at equal counts and moves the call. `none` on cells the class call did not place in the inhibitory class |
 | `cluster` | readable name, e.g. `Pvalb-2 (Mme/Cck)` — subclass block, index within block, then up to three genes whose cluster mean exceeds 0.5 in transform units. The **absolute** level, not deviation across clusters: a gene can deviate strongly and still be low everywhere, producing a name that reads as a marker for something the cluster barely expresses |
 | `cluster_id` | integer label; `-1` for cells that were not clustered (`ambiguous`, `low_counts`, or an all-zero profile) |
 | `p_inhibitory` | the mixture posterior the class call was cut from, so a borderline cell is visible rather than just labelled |
