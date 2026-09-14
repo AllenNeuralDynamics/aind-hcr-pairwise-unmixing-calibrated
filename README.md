@@ -359,6 +359,33 @@ what remains open. Start here if you want the reasoning rather than the API.
 [`docs/beta_explainer.png`](docs/beta_explainer.png) — the β figure from the section above,
 standalone.
 
+### Changelog
+
+**Labelling aligned to the HCR consensus-clustering protocol.** The unmixing itself is
+unchanged; what changed is how the annotated `.h5ad` is labelled.
+
+| | before | now |
+|---|---|---|
+| class | flat 100-count gate on Gad2/Pvalb/Vip/Sst/Npy, with Slc17a7-high cells needing Gad2 corroboration | two-component Gaussian mixture on log2((Gad2+1)/(Slc17a7+1)), cut at posterior 0.90 / 0.10 |
+| class values | `inhibitory` / `excitatory` / `unassigned` | `inhibitory` / `excitatory` / `ambiguous` / `low_counts` |
+| subclass | per cluster, argmax of the four markers on the normalised cluster means with a 1.2× enrichment floor | per cell, argmax on **raw counts** with a 20-count floor returning `unassigned` |
+| transform | per-cell mean, then per-gene 95th percentile clipped to 1 | per-gene 95th percentile, then per-cell total rescaled to the median total |
+| clustering | k = 20 inhibitory / k = 12 excitatory on the whole panel | k = 18 inhibitory on the protocol's fifteen genes / k = 12 excitatory on the rest |
+| cluster blocks | inherited from the per-cluster subclass call | plurality of the per-cell calls at 1.5× enrichment, else `Other`, plus the *Cck*-dominance promotion to `Sncg` |
+| cluster names | top three *enriched* genes, with barred gene lists | up to three genes above 0.5 in transform units, absolute level |
+| new in `obs` | — | `p_inhibitory`, the mixture posterior the class call was cut from |
+| new in `obsm` | — | `X_cluster`, the matrix k-means actually saw |
+
+The rules come from `matchings/hcr-inhibitory-consensus-capsule` (`code/PROTOCOL.md`)
+and are vendored in `labeling.py`, with the published constants copied rather than
+re-derived. Two parts of that protocol are **not** here: the ROI quality filter, which
+needs the per-mouse `HCR-ROI-label` asset this capsule does not mount, and the depth
+proxy, which needs a cell z column. The cohort run applies the ROI filter before its
+class call, so it reports a smaller ambiguous fraction on the same animal than this
+capsule does.
+
+Cluster labels from this capsule are **per mouse** and do not correspond across animals.
+
 ## Output files
 
 Written to `/root/capsule/results`. `<M>` is the mouse id, `<R>` the round key.
@@ -493,21 +520,23 @@ adata                       # e.g. 74,171 cells x 27 genes
 
 **`adata.X`** — raw transcript counts, cells × genes. Integers.
 
-**`adata.layers["normalized"]`** — the same matrix after the two-stage transform used
-for clustering:
+**`adata.layers["normalized"]`** — the same matrix after the **p95 transform**, in this
+order:
 
-1. each cell divided by **its own mean gene count**, so the unit is "relative to this cell's typical gene" and detection depth divides out;
-2. each gene divided by its own 95th percentile across cells, clipped to [0, 1], so a rare gene and an abundant one are comparable.
+1. each gene divided by its own 95th percentile across cells, so a rare gene and an abundant one are comparable;
+2. each cell divided by its own total and rescaled to the median cell total, so detection depth — which spans two orders of magnitude here — divides out.
 
-Cluster labels were computed on **this**, not on `X`: per-cell detection depth spans two
-orders of magnitude, and raw counts cluster on depth rather than identity. k-means runs
-on this matrix **directly** — no z-scoring, since stage 2 already puts every gene on a
+The order matters. Normalising cells first and genes second makes each gene's percentile
+depend on the cell composition of the table, so the same cell transforms differently in a
+single-mouse run and a cohort run. Genes first, cells second is what the consensus
+protocol uses, and it is why these values can be compared against the cohort figures.
+
+**`adata.obsm["X_cluster"]`** — the matrix k-means actually saw. The transform is
+recomputed on each class's own cells and its own gene space, so this is not a slice of
+`layers["normalized"]`; genes outside a cell's clustering space are zero-padded. k-means
+runs on it **directly** — no z-scoring, since the p95 stage already puts every gene on a
 common scale and re-inflating each to unit variance would give a gene detected in a
 handful of cells the same weight as one carrying real structure.
-
-The mean rather than the median in stage 1 is deliberate: with 27 genes a sparse cell's
-median is often 0 (11,993 of 76,143 cells on 800995), and those cells cannot be scaled at
-all. The mean is positive whenever any gene is detected, so no cell is dropped.
 
 **`adata.var`** — one row per gene, with `round`, `channel`, `gene`. The index is
 `R5-561-Cck` style, so the same gene imaged in two rounds stays distinguishable.
@@ -516,21 +545,45 @@ all. The mean is positive whenever any gene is detected, so no cell is dropped.
 
 | column | meaning |
 |---|---|
-| `class` | `inhibitory` if ANY of Gad2, Pvalb, Vip, Sst, Npy is ≥ `MIN_CLASS_COUNTS` (100) **and**, when Slc17a7 also clears it, Gad2 specifically must too. Without that corroboration an excitatory cell carrying a moderate Pvalb reading is admitted: on 800995 that put 1,081 cells (14.4% of the class) into three clusters whose Slc17a7 medians were 743–806 with Gad2 medians of 26–76. Lamp5 is deliberately NOT an admission marker — it is expressed in 45% of all cells here, so gating on it admits most of the excitatory population; it remains a subclass gene. `excitatory` if Slc17a7 clears the threshold and no corroborated inhibitory marker does; `unassigned` if Gad2 and Slc17a7 both clear it (2,098 cells — usually merged cells or residual contamination) or nothing does |
-| `subclass` | `Pvalb` / `Sst` / `Vip` / `Lamp5` for inhibitory clusters, by which canonical marker has the **highest expression** in the cluster, so the label never contradicts the heatmap. Enrichment (cluster mean ÷ across-cluster mean) is still applied as a floor of 1.2 on the winner, so a cluster with no marker standing out gets no subclass rather than whichever of four flat values was largest |
-| `cluster` | readable name, e.g. `Pvalb-2 (Mme/Calb1/Cck)` — subclass, index within subclass, then the top differentially expressed genes. Subclass genes are excluded from the marker list, since the subclass is already the prefix |
-| `cluster_id` | integer label; `-1` for cells that were not clustered (unassigned class) |
+| `class` | `inhibitory` / `excitatory` / `ambiguous` / `low_counts`, from a two-component Gaussian mixture on log2((Gad2+1)/(Slc17a7+1)) cut at posterior 0.90 and 0.10. Cells below 100 total counts are `low_counts` and take no part in the fit. A mixture rather than fixed per-marker thresholds: the boundary is set by the data's own two modes, so it tracks a mouse's detection depth instead of being calibrated on one animal and carried to the rest. Cells between the gates are `ambiguous` — around 1% in the cohort, and not a thresholding artefact: the fraction barely moves when the mixture is refitted per mouse and does not fall with library size |
+| `subclass` | `Pvalb` / `Sst` / `Vip` / `Lamp5` / `unassigned`, a **per-cell** call: whichever of the four markers carries the most **raw counts**, with a winner below 20 counts returning `unassigned`. On raw counts, not the transform — the p95 stage makes Lamp5 render about 3× darker than Sst at equal counts and moves the call. `none` on cells the class call did not place in the inhibitory class |
+| `cluster` | readable name, e.g. `Pvalb-2 (Mme/Cck)` — subclass block, index within block, then up to three genes whose cluster mean exceeds 0.5 in transform units. The **absolute** level, not deviation across clusters: a gene can deviate strongly and still be low everywhere, producing a name that reads as a marker for something the cluster barely expresses |
+| `cluster_id` | integer label; `-1` for cells that were not clustered (`ambiguous`, `low_counts`, or an all-zero profile) |
+| `p_inhibitory` | the mixture posterior the class call was cut from, so a borderline cell is visible rather than just labelled |
 | `total_counts`, `n_genes` | per-cell depth and the number of genes detected |
-| `<marker>_counts` | the raw counts of each class marker, so the gate is auditable |
+| `<marker>_counts` | the raw Gad2 and Slc17a7 counts the ratio was computed from, so the call is auditable |
+
+A cluster's block and a cell's own `subclass` are allowed to disagree. A cluster takes
+its block from the plurality of its cells' calls, required to be 1.5× that subclass's
+share of the background composition — enrichment rather than raw purity, because a
+modest share of a rare subclass is strong concentration while the same share of a common
+one is none. Clusters below the floor become `Other`. One post-hoc rule sits on top: a
+cluster whose top non-marker gene is *Cck*, above the 0.5 naming threshold and leading
+the runner-up by 1.5×, is promoted to `Sncg`, which the four markers cannot express.
 
 **`adata.uns["unmixing"]`** — a nested record of how the labels were made:
-`classification` (which markers were available, the count threshold, how many cells were
-double-positive or neither), `clustering` (method, seed, per-class cluster count and the
-name/subclass/enrichment of each), `normalization`, and `mouse_id` / `rounds`.
+`classification` (markers available, count floor, posterior gates, the fitted log-ratio
+thresholds, and the cell count in each class), `subclass` (markers available, count
+floor, per-subclass counts), `clustering` (method, seed, the enrichment and naming
+floors, the fifteen-gene panel, and per class the gene space, cluster count, and each
+cluster's name, block, size, purity and enrichment), `normalization`, and `mouse_id` /
+`rounds`.
 
-Clustering is computed **fresh from this matrix** — no external reference or
-pre-existing labels are used, so cluster identity is not comparable across mice or
-across runs unless you fit once and apply.
+#### These clusters are per mouse
+
+The k-means fit runs on one animal. Cluster identities therefore do **not** correspond
+across mice — `Sst-2` in one mouse is not `Sst-2` in another, and counting cells per
+cluster across animals from these labels is meaningless. For any across-mouse analysis
+use the consensus clusters from the cohort capsule
+(`matchings/hcr-inhibitory-consensus-capsule`), which fits all animals jointly at k = 18
+over 200 subsampled fits and assigns every cell to a shared set of centroids.
+
+`class` and `subclass` are per-cell rules with no fitted cross-cell component, so those
+two labels **do** carry across mice. One caveat on comparing them to the cohort run's:
+the cohort filters ROIs on the segmentation quality model before its class call and
+re-derives the call on the retained cells, which roughly halves the ambiguous band. This
+capsule does not mount the ROI-label assets and so does not filter, meaning it reports
+a larger ambiguous fraction on the same animal.
 
 ### Plotting it
 
@@ -607,9 +660,13 @@ channel-level artefacts visible as vertical bands:
 ![Inhibitory, round x channel order](docs/cellxgene_inhibitory_rc.png)
 
 `summary` is the per-cluster table (group, subclass, `Subclass(markers)` name, cell
-count); `info` reports which clusters were dropped as empty. Both examples were run
-against a real six-round `.h5ad` — the all-cells panel gives 32 clusters over 55,565
-classified cells, the inhibitory panel 20 clusters over 3,401.
+count); `info` reports which clusters were dropped as empty.
+
+The four figures above are the capsule's own, from the six-round 800995 run: 30 clusters
+over 63,868 clustered cells on the all-cells panel, 18 over 7,342 on the inhibitory one.
+The `Sncg` block holds 255 cells in one *Cck* cluster, promoted by the dominance rule.
+Note that the plotting skill recomputes its own clustering from the matrix you hand it,
+so its cluster count will not match the capsule's unless you pass the capsule's labels.
 
 Note that `display=` controls only the colour scale: clustering was done on the
 normalised matrix either way, so the two modes show the same rows in the same order.
@@ -852,42 +909,54 @@ Alongside the spot tables, the capsule writes `<mouse>_cellxgene_annotated.h5ad`
 | slot | contents |
 |---|---|
 | `X` | **raw** transcript counts, all cells × all genes |
-| `layers["normalized"]` | the matrix clustering ran on: per-cell counts ÷ cell total × median cell total, then each gene ÷ its 95th percentile, clipped to 1 |
-| `obs` | `class`, `subclass`, `cluster`, `cluster_id`, marker counts, `total_counts`, `n_genes` |
+| `layers["normalized"]` | the p95 transform over all cells and genes: each gene ÷ its 95th percentile, then each cell ÷ its own total × the median total |
+| `obsm["X_cluster"]` | the matrix k-means actually saw, transformed per class on that class's own cells and genes, zero-padded elsewhere |
+| `obs` | `class`, `subclass`, `cluster`, `cluster_id`, `p_inhibitory`, marker counts, `total_counts`, `n_genes` |
 | `var` | `round`, `channel`, `gene` per column |
 | `uns["unmixing"]` | every parameter the labels were computed with |
 
-Both matrices are stored rather than one: a reader who wants counts should not have to
-invert a normalization, and a reader reproducing the clustering should not have to guess
+All three matrices are stored rather than one: a reader who wants counts should not have
+to invert a transform, and a reader reproducing the clustering should not have to guess
 how it was done.
+
+**Labels follow the HCR consensus-clustering protocol** (`code/PROTOCOL.md` in
+`matchings/hcr-inhibitory-consensus-capsule`), vendored here as `labeling.py` so this
+capsule and the cohort run derive them the same way. Class is a two-component mixture on
+the *Gad2*/*Slc17a7* ratio; subclass is a per-cell raw-count argmax over the four
+markers; both are described in detail in the `obs` table above.
 
 **Clusters** come from k-means run **separately on excitatory and inhibitory cells**,
 then merged — one joint clustering spends most of its clusters separating the two
-classes instead of resolving structure within them.
+classes instead of resolving structure within them. Inhibitory cells are clustered at
+**k = 18** on the protocol's fifteen genes, with the rest of the panel held out so it
+stays available as an independent check. Excitatory cells are clustered at **k = 12** on
+the whole panel less *Gad2*, *Slc17a7* and *GFP*; there is no protocol counterpart for
+the excitatory side, so that k is this capsule's own and was not swept.
 
-Names are subclass-first with the most *enriched* genes appended — enrichment against
-the across-cluster mean, not raw level, so an abundant gene does not name every cluster.
-The canonical subclass genes (`Pvalb`, `Sst`, `Vip`, `Lamp5`) are **excluded from the
-marker list**, since the subclass is already the prefix and repeating it wastes a slot:
+Names are block-first with up to three genes whose cluster mean exceeds **0.5 in
+transform units** — the absolute level, not deviation across clusters, because a gene
+can deviate strongly and still be low everywhere. The block's own marker is excluded,
+since it is already the prefix:
 
 ```
-Pvalb-2 (Mme/Pthlh/Gad2)        Pvalb-4 (Mme/Pthlh/Tac)
-Lamp5-1 (Reln/Hpse/Ndnf)        Vip-3 (Tac2/Crh/Npy)
-Sst-4 (Calb1/Npy/Calb2)         Exc-1 (...)
+Pvalb-2 (Mme/Cck)               Sncg-1 (Cck/Calb2)
+Lamp5-1 (Reln/Hpse/Ndnf)        Vip-3 (Crh/Npy)
+Sst-4 (Calb2/Npy)               Exc-1 (...)
 ```
 
-The subclass *call* still uses those genes; only the marker list excludes them. A
-cluster with no non-subclass gene above the enrichment floor gets no suffix rather than
-an invented one.
+A cluster with no gene above the naming floor gets no suffix rather than an invented one.
 
-**Class labels require R1.** The only excitatory marker in the panel is `Slc17a7`, imaged
-in **R1** (`488=GFP, 561=Slc17a7`); `Gad2` is in R4. A cell positive for exactly one
-marker gets that class; positive for both, or neither, gets `unassigned` — those are the
-cells worth inspecting, and forcing them into a class would hide them. **Always include R1 and R4**; without R1 nothing is called
-excitatory, because "not Gad2⁺" would sweep in low-quality cells, mis-segmented cells
-and non-neuronal cells alike. Round discovery picks up every round present by default,
-and passing `--rounds` without R1 or R4 prints a warning rather than quietly producing
-an unlabelled table. `uns` records which markers were available.
+**These clusters are per mouse.** The fit runs on one animal, so cluster identities do
+not correspond across mice. Use the cohort capsule's consensus clusters for anything
+that compares animals; `class` and `subclass` are per-cell rules and do carry across.
+
+**Class labels require R1 and R4.** The class call is a ratio, so it needs both markers:
+`Slc17a7` is imaged in **R1** (`488=GFP, 561=Slc17a7`) and `Gad2` in R4. With either
+round absent there is no ratio to fit and every cell is left `unassigned` rather than
+asserting a class from one marker's absence — low-quality cells, mis-segmented cells and
+non-neuronal cells would all land in that bucket. Round discovery picks up every round
+present by default, and passing `--rounds` without R1 or R4 prints a warning rather than
+quietly producing an unlabelled table. `uns` records which markers were available.
 
 R1 is cheap to include: it has only two channels, 488 and 561, which are two apart, so
 the control allowlist admits no direction between them and its unmixing is close to a

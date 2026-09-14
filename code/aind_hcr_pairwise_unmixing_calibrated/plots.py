@@ -28,9 +28,13 @@ STD_GENE_ORDER = ("GFP", "Pvalb", "Sst", "Vip", "Lamp5", "Npy", "Ndnf", "Cck", "
 #: Subclass block colours, and the order blocks are stacked in. Inhibitory first: on the
 #: all-cells figure they are a small minority of the rows (11% on 800995), so putting
 #: them at the top keeps them visible instead of buried under the excitatory block.
+#: Colours and the within-inhibitory order are the cohort capsule's, so a per-mouse
+#: figure and a consensus figure can be read side by side. Sncg is the Allen taxonomy's
+#: darker purple against Vip's.
 SUBCLASS_COLORS = {"Pvalb": "#D93137", "Sst": "#FF9900", "Vip": "#A45FBF",
-                   "Lamp5": "#DA808C", "Inh": "#999999", "Exc": "#00A809"}
-SUBCLASS_ORDER = ("Pvalb", "Sst", "Vip", "Lamp5", "Inh", "Exc")
+                   "Lamp5": "#DA808C", "Sncg": "#6A359C", "Other": "#8C8C8C",
+                   "unassigned": "#C9C4BD", "Exc": "#00A809"}
+SUBCLASS_ORDER = ("Lamp5", "Sncg", "Vip", "Sst", "Pvalb", "Other", "Exc")
 
 #: A block thinner than this fraction of the axis cannot hold a rotated name inside its
 #: colour bar, so its name is fanned out to the left on a leader line instead.
@@ -142,8 +146,11 @@ def _panel(a, ax, columns, display, full_labels, clusters, blocks, boundaries,
     n = a.n_obs
     matrix = a[:, columns].layers["normalized"] if display == "normalized" else a[:, columns].X
     matrix = matrix.toarray() if hasattr(matrix, "toarray") else np.asarray(matrix)
+    # 1.5 for the transform, matching the cohort figures: the p95 stage caps a typical
+    # gene near 1 but the per-cell rescaling pushes the brightest cells above it, and
+    # clipping at 1.0 flattened the difference between a strong and a saturating marker.
     image = ax.imshow(matrix, aspect="auto", cmap="Greys", vmin=0,
-                      vmax=(1.0 if display == "normalized" else 200),
+                      vmax=(1.5 if display == "normalized" else 200),
                       interpolation="nearest")
     ax.set_xticks(range(len(columns)))
     ax.set_xticklabels(list(columns) if full_labels
@@ -208,7 +215,7 @@ def write_plots(adata, output_dir, mouse_id, rounds):
                     axes[j].set_ylabel("Cells, grouped by cluster", fontsize=7.5)
                 bar = fig.colorbar(image, ax=axes[j], orientation="horizontal",
                                    pad=0.25, fraction=0.045)
-                bar.set_label("fraction of gene 95th pct" if display == "normalized"
+                bar.set_label("p95 transform (clip 1.5)" if display == "normalized"
                               else "transcript count (clip 200)", fontsize=6.8)
             label = "all cells" if cell_class is None else "inhibitory cells"
             census = ", ".join(f"{p} {e - s:,}" for p, s, e, _ in blocks)

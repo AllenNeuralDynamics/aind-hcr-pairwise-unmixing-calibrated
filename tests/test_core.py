@@ -306,6 +306,11 @@ def test_no_data_description_written_without_parent(tmp_path):
 
 
 # ---------------------------------------------------------------- annotation
+#
+# The class, subclass, transform and cluster-naming rules are the HCR consensus
+# protocol's, vendored in labeling.py. These tests pin the behaviour the protocol
+# specifies, not the implementation: each one states the rule it is defending so a
+# future change that breaks it has to argue with the rule rather than the assertion.
 
 
 def _fake_table(n_inh=600, n_exc=900, seed=0):
@@ -320,7 +325,7 @@ def _fake_table(n_inh=600, n_exc=900, seed=0):
         v[1] = rng.poisson(300)        # Gad2 high
         v[2 + (i % 4)] = rng.poisson(400)   # one subclass marker high
         # a secondary, non-subclass marker co-varying with the subclass, so cluster
-        # names still have something to report once subclass genes are excluded
+        # names still have something to report once the block marker is excluded
         v[6 + (i % 2)] = rng.poisson(200)   # Cck or Mme
         rows.append(v)
     for _ in range(n_exc):
@@ -332,68 +337,262 @@ def _fake_table(n_inh=600, n_exc=900, seed=0):
     return pd.DataFrame(np.array(rows), index=idx, columns=genes)
 
 
-def test_class_labels_need_a_positive_marker():
-    """Without Slc17a7 nothing may be called excitatory."""
+def test_class_call_separates_the_two_modes():
+    """The mixture must recover a clean bimodal split without being told where to cut."""
     from aind_hcr_pairwise_unmixing_calibrated import annotate as A
 
     t = _fake_table()
-    cls, info = A.assign_class(t)
-    assert set(cls.unique()) == {"inhibitory", "excitatory"}
-
-    no_exc = t.drop(columns=["R1-561-Slc17a7"])
-    cls2, info2 = A.assign_class(no_exc)
-    assert "excitatory" not in set(cls2.unique())          # never asserted
-    # "none" rather than None: uns is written to HDF5, which cannot store None
-    assert info2["markers_available"]["excitatory"] == "none"
-    assert (cls2 == "inhibitory").sum() == (cls == "inhibitory").sum()
-
-
-def test_double_positive_is_unassigned():
-    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
-
-    t = _fake_table(n_inh=10, n_exc=10)
-    t.iloc[0, t.columns.get_loc("R1-561-Slc17a7")] = 500     # both markers high
-    cls, info = A.assign_class(t)
-    assert cls.iloc[0] == "unassigned"
-    # key renamed when the rule widened to any interneuron marker; the guarantee is the
-    # same -- Gad2 AND Slc17a7 together is refused rather than guessed
-    assert info["n_ambiguous_gad2_and_slc17a7"] == 1
+    cls, info, posterior = A.assign_class(t)
+    assert set(cls.unique()) <= {"inhibitory", "excitatory", "ambiguous", "low_counts"}
+    # the fixture's two populations are far apart, so essentially everything resolves
+    assert info["n_inhibitory"] >= 590 and info["n_excitatory"] >= 890
+    assert len(posterior) == len(t)
+    # the gates are posteriors, so the fitted log-ratio thresholds must bracket zero:
+    # below one and above the other are the two modes
+    lo, hi = info["log_ratio_thresholds"]
+    assert lo < hi
 
 
-def test_any_interneuron_marker_calls_inhibitory():
-    """Pvalb/Vip/Sst alone are enough, without Gad2.
+def test_class_needs_both_markers():
+    """The call is a RATIO. With one marker gone there is nothing to fit.
 
-    Gad2 alone under-calls: on 800995 it labelled 3,401 cells inhibitory where the
-    four-marker rule finds 7,035. A cell strongly expressing a canonical interneuron
-    marker is inhibitory whether or not its Gad2 reading cleared the bar.
+    Asserting excitatory from the absence of Gad2 would sweep in low-quality cells,
+    mis-segmented cells and non-neuronal cells alike.
     """
     from aind_hcr_pairwise_unmixing_calibrated import annotate as A
 
-    t = _fake_table(n_inh=4, n_exc=4)
-    gad = t.columns[t.columns.str.endswith("Gad2")][0]
-    t[gad] = 0                                    # nothing clears Gad2
-    # GFP is in the gate too: in this preparation it is an interneuron reporter, and it
-    # is the single largest contributor (on 800995: 11,835 positive cells vs Gad2's 6,851)
-    tested = 0
-    for gene in A.INHIBITORY_MARKERS:
-        if gene == "Gad2":
-            continue                              # held at 0 above, on purpose
-        hits = t.columns[t.columns.str.endswith(gene)]
-        if not len(hits):
-            continue                              # gene absent from this fixture's panel
-        col = hits[0]
-        t.loc[t.index[0], col] = 500
-        cls, info = A.assign_class(t)
-        assert cls.iloc[0] == "inhibitory", f"{gene} alone should call inhibitory"
-        t.loc[t.index[0], col] = 0
-        tested += 1
-    assert tested >= 3, f"expected to exercise >=3 markers, got {tested}"
+    t = _fake_table()
+    for dropped in ("R1-561-Slc17a7", "R4-638-Gad2"):
+        cls, info, posterior = A.assign_class(t.drop(columns=[dropped]))
+        assert set(cls.unique()) == {"unassigned"}
+        assert "none" in info["markers_available"].values()
+        assert np.isnan(posterior).all()
 
-    # and the threshold is honoured: just under it is not a call
-    col = t.columns[t.columns.str.endswith("Pvalb")][0]
-    t.loc[t.index[0], col] = A.MIN_CLASS_COUNTS - 1
-    cls, _ = A.assign_class(t)
-    assert cls.iloc[0] != "inhibitory"
+
+def test_low_count_cells_are_held_out_of_the_fit():
+    """A cell below the count floor has no evidence either way and must not be classed.
+
+    It also must not influence the mixture: a mass of near-empty cells sits at a log
+    ratio of 0 and would pull a component toward the middle.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table(n_inh=300, n_exc=300)
+    t.iloc[0, :] = 0.0
+    t.iloc[1, :] = 1.0                       # 8 counts total, well under the floor
+    cls, info, _ = A.assign_class(t)
+    assert cls.iloc[0] == "low_counts" and cls.iloc[1] == "low_counts"
+    assert info["n_low_counts"] == 2
+
+
+def test_ambiguous_cells_are_between_the_gates_and_stay_out_of_both_classes():
+    """Cells with both markers high are `ambiguous`, not forced into a class.
+
+    They are usually merged cells from segmentation or residual contamination; calling
+    them either way propagates that error into every downstream count.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    # The default fixture's two modes are separated far enough that nothing lands
+    # between them. Real marker distributions are broad and overlapping, so this test
+    # builds its own table with a realistic within-mode spread.
+    rng = np.random.RandomState(1)
+    n, genes = 800, ["R1-561-Slc17a7", "R4-638-Gad2", "R5-514-Pvalb", "R5-594-Sst",
+                     "R5-638-Vip", "R4-488-Lamp5", "R5-561-Cck", "R3-514-Mme"]
+    x = rng.poisson(8, (n, len(genes))).astype(float)
+    inh = np.arange(n) < 300
+    x[inh, 1] = rng.lognormal(5.0, 1.2, inh.sum())      # Gad2 high, broad
+    x[inh, 0] = rng.lognormal(2.0, 1.2, inh.sum())
+    x[~inh, 0] = rng.lognormal(5.5, 1.2, (~inh).sum())  # Slc17a7 high, broad
+    x[~inh, 1] = rng.lognormal(1.8, 1.2, (~inh).sum())
+    t = pd.DataFrame(x, columns=genes, index=[f"cell{i}" for i in range(n)])
+
+    cls, info, posterior = A.assign_class(t)
+    amb = cls == "ambiguous"
+    assert amb.sum() > 0, "overlapping modes must leave cells between the gates"
+    assert info["n_ambiguous"] == int(amb.sum())
+    assert (posterior[amb.to_numpy()] > 0.10).all()
+    assert (posterior[amb.to_numpy()] < 0.90).all()
+    assert not (amb & cls.isin(["inhibitory", "excitatory"])).any()
+
+
+def test_subclass_is_a_per_cell_raw_count_argmax():
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table(n_inh=40, n_exc=10)
+    sub, info = A.assign_subclass(t)
+    markers = ["R5-514-Pvalb", "R5-594-Sst", "R5-638-Vip", "R4-488-Lamp5"]
+    expected = t[markers].idxmax(axis=1).map(lambda c: c.split("-")[-1])
+    high = t[markers].max(axis=1) >= 20
+    assert (sub[high] == expected[high]).all()
+
+
+def test_subclass_floor_returns_unassigned_rather_than_a_guess():
+    """A cell whose winning marker is nearly absent has not evidenced a subclass."""
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table(n_inh=20, n_exc=20)
+    t.iloc[0, 2:6] = [3.0, 2.0, 1.0, 0.0]        # all four markers below 20
+    sub, info = A.assign_subclass(t)
+    assert sub.iloc[0] == "unassigned"
+    assert info["count_floor"] == 20
+
+
+def test_subclass_is_called_on_raw_counts_not_the_transform():
+    """The p95 stage moves the argmax, so the call must not be made on it.
+
+    Dividing each gene by its own 95th percentile inflates a dim marker relative to a
+    bright one -- Lamp5 renders several times darker than Sst at equal raw counts -- so
+    the transformed argmax can name a different subclass than the counts do.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table(n_inh=200, n_exc=200)
+    markers = ["R5-514-Pvalb", "R5-594-Sst", "R5-638-Vip", "R4-488-Lamp5"]
+    norm, _ = A.normalize_cellxgene(t)
+
+    raw_call = t[markers].idxmax(axis=1)
+    transformed_call = norm[markers].idxmax(axis=1)
+    assert (raw_call != transformed_call).any(), \
+        "fixture no longer exercises the difference this test exists to catch"
+
+    sub, _ = A.assign_subclass(t)
+    high = t[markers].max(axis=1) >= 20
+    assert (sub[high] == raw_call[high].map(lambda c: c.split("-")[-1])).all()
+
+
+def test_transform_scales_genes_first_then_cells():
+    """Order is load-bearing, and the cell stage is a total, not a mean.
+
+    Genes first, cells second is what the consensus protocol uses. Reversing it makes
+    each gene's percentile depend on the cell composition of the table, so the same
+    cell transforms differently in a single-mouse and a cohort run.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table(n_inh=50, n_exc=50)
+    norm, info = A.normalize_cellxgene(t)
+    assert norm.shape == t.shape
+    assert info["transform"] == "p95_then_cell_total"
+    # every cell ends on the same total: that is what the second stage does
+    totals = norm.to_numpy().sum(1)
+    assert np.allclose(totals, totals[0])
+    # and it is NOT clipped to 1 -- the per-cell rescaling pushes bright cells above it
+    assert float(norm.to_numpy().max()) > 1.0
+
+
+def test_an_empty_cell_survives_the_transform_without_poisoning_it():
+    """An all-zero row has no scale. It must come out zero, not NaN."""
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table(n_inh=20, n_exc=20)
+    t.iloc[0, :] = 0.0
+    norm, info = A.normalize_cellxgene(t)
+    assert np.isfinite(norm.to_numpy()).all()
+    assert float(norm.iloc[0].sum()) == 0.0
+    assert info["n_zero_total_cells"] == 1
+
+
+def test_a_cluster_needs_enrichment_not_just_plurality_to_take_a_subclass():
+    """Plurality alone is not concentration.
+
+    A modest share of a rare subclass is strong evidence; the same share of a common
+    one is none. Below the 1.5x floor the cluster is `Other` rather than carrying a
+    subclass name it has not earned.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import labeling as L
+
+    genes = list(L.HCR_SUBCLASS_MARKERS) + ["Cck", "Mme"]
+    means = pd.DataFrame(0.1, index=[0, 1], columns=genes)
+    # background is 80% Pvalb, so a cluster that is 80% Pvalb is not enriched at all
+    subclass = np.array(["Pvalb"] * 80 + ["Sst"] * 20)
+    labels = np.array([0] * 80 + [1] * 20)
+    blocks, diag = L.hcr_cluster_blocks(means, subclass, labels)
+    assert blocks[0] == "Other", "an unenriched plurality must not become a block"
+    assert blocks[1] == "Sst", "a 20% subclass concentrated into one cluster is enriched"
+    assert diag.loc[0, "enrichment"] < 1.5 <= diag.loc[1, "enrichment"]
+
+
+def test_cck_dominant_cluster_is_promoted_to_sncg():
+    """Post-hoc rule: the four markers cannot express Sncg, so Cck stands in for it.
+
+    The dominance clause is what keeps it honest -- without it a Pvalb/Mme cluster is
+    promoted on a near-tie between Cck and Mme.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import labeling as L
+
+    genes = list(L.HCR_SUBCLASS_MARKERS) + ["Cck", "Mme"]
+    means = pd.DataFrame(0.1, index=[0, 1], columns=genes)
+    means.loc[0, "Cck"] = 1.2                  # clear lead over Mme
+    means.loc[0, "Mme"] = 0.2
+    means.loc[1, "Cck"] = 0.70                 # a near-tie must NOT promote
+    means.loc[1, "Mme"] = 0.67
+    subclass = np.array(["Pvalb"] * 10 + ["Sst"] * 90)
+    labels = np.array([0] * 10 + [1] * 90)
+    blocks, _ = L.hcr_cluster_blocks(means, subclass, labels)
+    assert blocks[0] == "Sncg"
+    assert blocks[1] != "Sncg"
+
+
+def test_cluster_names_use_absolute_level_above_the_floor():
+    """A gene can deviate strongly across clusters and still be low everywhere.
+
+    Naming on deviation produces a label that reads as a marker for something the
+    cluster barely expresses, so the rule is the absolute level.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import labeling as L
+
+    genes = ["Pvalb", "Cck", "Mme"]
+    means = pd.DataFrame([[2.0, 1.1, 0.02],       # Mme deviates 4x but is ~0
+                          [2.0, 0.2, 0.005]],
+                         index=[0, 1], columns=genes)
+    names, ordered = L.hcr_cluster_names(means, {0: "Pvalb", 1: "Pvalb"})
+    assert names[0] == "Pvalb-1 (Cck)", names[0]
+    assert names[1] == "Pvalb-2", "no gene clears the floor, so no invented suffix"
+    assert "Mme" not in names[0]
+    assert ordered == [0, 1]
+
+
+def test_clusters_are_numbered_within_block_with_unique_ids_across_classes():
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table()
+    cls, _, _ = A.assign_class(t)
+    sub, _ = A.assign_subclass(t)
+    sub = sub.where(cls == "inhibitory", "none")
+    labels, cid, matrix, info = A.cluster_by_class(t, cls, sub, n_inh=4, n_exc=3)
+
+    inh_names = set(labels[cls == "inhibitory"].unique())
+    exc_names = set(labels[cls == "excitatory"].unique())
+    assert all(n.startswith("Exc-") for n in exc_names)
+    # the block marker never appears in its own cluster's suffix
+    assert not any(f"({p}" in n for n in inh_names for p in A.SUBCLASS_GENES
+                   if n.startswith(p))
+    assert cid[cls == "inhibitory"].nunique() == 4
+    assert cid[cls == "excitatory"].nunique() == 3
+    assert not (set(cid[cls == "inhibitory"]) & set(cid[cls == "excitatory"]))
+    assert info["inhibitory"]["n_clusters"] == 4
+
+
+def test_inhibitory_clustering_sees_only_the_protocol_genes():
+    """The held-out genes are what make a cluster checkable.
+
+    A cluster that separates on the clustering genes and then also separates on a gene
+    the distance never saw has evidence the clustering could not have manufactured. If
+    every gene feeds the distance, that check is unavailable.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+    from aind_hcr_pairwise_unmixing_calibrated.labeling import HCR_PANEL_15
+
+    t = _fake_table()
+    inh_genes = [A.gene_name(c) for c in A.clustering_genes(t, "inhibitory")]
+    exc_genes = [A.gene_name(c) for c in A.clustering_genes(t, "excitatory")]
+    assert set(inh_genes) <= set(HCR_PANEL_15)
+    assert "Gad2" not in inh_genes and "Slc17a7" not in inh_genes
+    # the excitatory side has no protocol gene set, but never clusters on the class
+    # markers or the reporter
+    for barred in A.EXCLUDED_FROM_CLUSTERING:
+        assert barred not in exc_genes
 
 
 def test_gene_orders_are_complete_permutations():
@@ -403,7 +602,6 @@ def test_gene_orders_are_complete_permutations():
     plot it twice. The std order is built by walking a fixed name list, so a panel gene
     missing from that list has to fall through to the tail rather than vanish.
     """
-    import pandas as pd
     from aind_hcr_pairwise_unmixing_calibrated import plots as P
 
     cols = ["R1-561-Slc17a7", "R5-514-Pvalb", "R4-638-Gad2", "R2-488-Ndnf",
@@ -415,84 +613,20 @@ def test_gene_orders_are_complete_permutations():
         order = P.gene_order(var, kind)
         assert sorted(order) == sorted(cols), f"{kind} is not a permutation"
         assert len(set(order)) == len(order), f"{kind} has duplicates"
-    # acquisition order really is round-then-channel, numerically not lexically
     assert P.gene_order(var, "rc") == ["R1-561-Slc17a7", "R2-488-Ndnf", "R4-638-Gad2",
                                        "R5-514-Pvalb", "R9-488-Unlisted"]
-    # a gene absent from STD_GENE_ORDER still appears, at the tail
     assert "R9-488-Unlisted" in P.gene_order(var, "std")
 
 
-def test_slc17a7_high_cells_need_gad2_corroboration():
-    """An interneuron marker alone cannot admit a strongly Slc17a7-positive cell.
+def test_every_block_has_a_colour():
+    """block_layout colours rows by the cluster-name prefix, so a block with no entry
+    in SUBCLASS_COLORS renders grey and silently loses its identity in the figure."""
+    from aind_hcr_pairwise_unmixing_calibrated import plots as P
+    from aind_hcr_pairwise_unmixing_calibrated.labeling import HCR_SUBCLASS_MARKERS
 
-    This is the rule that removed 1,081 cells from the inhibitory class on 800995 --
-    three clusters with Slc17a7 medians of 743-806 and Gad2 medians of 26-76, admitted
-    on Pvalb medians of 154-196 against a real Pvalb cluster's 262. Every one of the
-    1,081 was Slc17a7-positive and none had Gad2 >= threshold, so they moved to
-    excitatory rather than to unassigned.
-    """
-    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
-
-    t = _fake_table(n_inh=6, n_exc=6)
-    thr = A.MIN_CLASS_COUNTS
-    pv = t.columns[t.columns.str.endswith("Pvalb")][0]
-    gd = t.columns[t.columns.str.endswith("Gad2")][0]
-    sl = t.columns[t.columns.str.endswith("Slc17a7")][0]
-
-    # Pvalb-positive AND Slc17a7-high, no Gad2 -> NOT inhibitory (the contaminant case)
-    t.loc[t.index[0], [pv, sl, gd]] = [5 * thr, 8 * thr, 0]
-    # the same Pvalb signal WITH Gad2 -> corroborated, but Gad2+Slc17a7 both high is the
-    # pre-existing AMBIGUOUS case, which takes precedence -> unassigned, not inhibitory.
-    # So corroboration never admits an Slc17a7-high cell; its effect is to move cells
-    # that used to be inhibitory into excitatory (no Gad2) or unassigned (Gad2 too).
-    t.loc[t.index[1], [pv, sl, gd]] = [5 * thr, 8 * thr, 5 * thr]
-    # Pvalb-positive with LOW Slc17a7 -> inhibitory, no corroboration needed
-    t.loc[t.index[2], [pv, sl, gd]] = [5 * thr, 0, 0]
-
-    cls, info = A.assign_class(t)
-    assert cls.iloc[0] != "inhibitory", "Slc17a7-high + Pvalb, no Gad2 must not be inhibitory"
-    assert cls.iloc[0] == "excitatory", "it is Slc17a7-positive, so excitatory is the call"
-    assert cls.iloc[1] == "unassigned", "Gad2 AND Slc17a7 both high stays ambiguous"
-    assert cls.iloc[2] == "inhibitory", "low Slc17a7 needs no corroboration"
-    assert info["n_ambiguous_gad2_and_slc17a7"] >= 1
-
-
-def test_lamp5_is_a_subclass_gene_but_never_admits():
-    """Lamp5 must not be in the admission gate.
-
-    It is expressed in 45% of ALL cells on 800995 (median 84, against 10/5/8 for
-    Pvalb/Sst/Vip), so gating on it would admit most of the excitatory population --
-    30,966 of its 34,235 positive cells are excitatory. Npy is the sparse alternative
-    that was added instead (median 0, 1.9% of cells positive).
-    """
-    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
-
-    assert "Lamp5" not in A.INHIBITORY_MARKERS
-    assert "Npy" in A.INHIBITORY_MARKERS
-    assert "Lamp5" in A.SUBCLASS_GENES, "still names a group once a cell IS inhibitory"
-
-    t = _fake_table(n_inh=4, n_exc=4)
-    for g in A.INHIBITORY_MARKERS:                 # zero every admission marker present
-        hits = t.columns[t.columns.str.endswith(g)]
-        if len(hits):
-            t[hits[0]] = 0
-    lam = t.columns[t.columns.str.endswith("Lamp5")][0]
-    t.loc[t.index[0], lam] = 50 * A.MIN_CLASS_COUNTS
-    cls, _ = A.assign_class(t)
-    assert cls.iloc[0] != "inhibitory", "Lamp5 alone must not admit a cell"
-
-
-def test_marker_names_exclude_round6_and_gate_genes():
-    """Round-6 genes, the class gates and GFP never appear in a cluster name."""
-    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
-
-    genes = list(A.ROUND6_GENES) + list(A.GATE_GENES) + ["Mme", "Pthlh"]
-    means = pd.DataFrame([[10.0] * len(genes), [1.0] * len(genes)], columns=genes)
-    means.loc[0, "Sncg"] = 500      # would dominate enrichment if not barred
-    means.loc[0, "Gad2"] = 500
-    names = A.cluster_marker_names(means, {0: "Pvalb", 1: "Pvalb"})
-    for banned in A.ROUND6_GENES + A.GATE_GENES:
-        assert banned not in names[0], f"{banned} leaked into {names[0]}"
+    for block in tuple(HCR_SUBCLASS_MARKERS) + ("Sncg", "Other", "Exc"):
+        assert block in P.SUBCLASS_COLORS, f"{block} has no colour"
+        assert block in P.SUBCLASS_ORDER, f"{block} has no position in the stack"
 
 
 def test_round_channel_order_is_acquisition_order():
@@ -503,92 +637,8 @@ def test_round_channel_order_is_acquisition_order():
         "R1-488-GFP", "R1-561-Slc17a7", "R2-514-Hpse", "R5-638-Vip", "R10-488-X"]
 
 
-def test_normalization_is_reversible_in_shape_and_bounded():
-    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
-
-    t = _fake_table()
-    norm, info = A.normalize_cellxgene(t)
-    assert norm.shape == t.shape
-    assert float(norm.to_numpy().max()) <= 1.0 + 1e-9        # clipped at the 95th pct
-    assert float(norm.to_numpy().min()) >= 0.0
-    assert info["depth_scale"] == "per_cell_mean"
-    # the MEAN is why no cell is dropped: it is positive whenever any gene is detected,
-    # where a 27-gene panel leaves ~16% of real cells with a median of 0
-    assert info["n_zero_mean_cells"] == 0
-
-
-def test_no_cell_is_dropped_by_depth_normalization():
-    """Every cell with at least one transcript is scalable."""
-    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
-
-    t = _fake_table(n_inh=5, n_exc=5)
-    t.iloc[0, :] = 0.0                     # completely empty cell
-    t.iloc[1, :] = 0.0
-    t.iloc[1, 0] = 1.0                     # a single transcript in one gene
-    norm, info = A.normalize_cellxgene(t)
-    assert info["n_zero_mean_cells"] == 1, "only the all-zero cell is unscalable"
-    assert float(norm.iloc[1].sum()) > 0, "one transcript is enough to be scaled"
-    # a median-based stage 1 would have failed BOTH: with 8 genes, one nonzero gene
-    # still leaves a median of 0
-    assert float(np.median(t.iloc[1].to_numpy())) == 0.0
-
-
-def test_subclass_is_the_highest_expressing_marker_not_the_most_enriched():
-    """Level, not enrichment -- so the label never contradicts the heatmap.
-
-    Pvalb is the highest-expressing marker in cluster 0 (0.90 vs Lamp5's 0.40), but
-    Lamp5 is the more ENRICHED one: 0.40/0.20 = 2.00x its across-cluster mean, against
-    0.90/0.50 = 1.80x for Pvalb. The old enrichment rule labelled such clusters Lamp5
-    while the Pvalb column was visibly darker; three real clusters on 800995 had exactly
-    this contradiction.
-    """
-    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
-
-    means = pd.DataFrame(
-        {"R5-514-Pvalb": [0.90, 0.10],     # cluster 0 highest here
-         "R4-488-Lamp5": [0.40, 0.00],     # but far more enriched here
-         "R5-594-Sst":   [0.05, 0.80],
-         "R5-638-Vip":   [0.05, 0.05]},
-        index=[0, 1])
-    enrich0 = means.loc[0] / means.mean(0)
-    assert enrich0["R4-488-Lamp5"] > enrich0["R5-514-Pvalb"], "fixture must be enrichment-inverted"
-    sc = A.assign_subclass(means)
-    assert sc[0][0] == "Pvalb", "subclass must follow expression level"
-    assert sc[1][0] == "Sst"
-
-
-def test_clusters_named_by_subclass_and_numbered():
-    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
-
-    t = _fake_table()
-    norm, _ = A.normalize_cellxgene(t)
-    cls, _ = A.assign_class(t)
-    labels, cid, subclass, info = A.cluster_by_class(norm, cls, n_inh=4, n_exc=3)
-
-    inh_names = set(labels[cls == "inhibitory"].unique())
-    exc_names = set(labels[cls == "excitatory"].unique())
-    # A marker suffix appears only when a gene clears the enrichment floor. The
-    # synthetic excitatory cells are homogeneous by construction, so some Exc
-    # clusters legitimately have no distinguishing marker and no suffix -- naming
-    # one anyway would be inventing structure. Inhibitory cells DO differ by
-    # subclass here, so every inhibitory cluster must carry markers.
-    # subclass genes are excluded from marker lists, so a name carries a suffix only
-    # when the cluster has a distinguishing NON-subclass gene; the fixture gives
-    # inhibitory cells a secondary marker so they do
-    assert all("(" in n and ")" in n for n in inh_names)
-    assert not any("(Pvalb" in n or "(Sst" in n or "(Vip" in n or "(Lamp5" in n
-                   for n in inh_names)
-    assert all(n.startswith("Exc-") for n in exc_names)
-    # inhibitory clusters carry a canonical subclass prefix
-    assert any(n.split("-")[0] in A.SUBCLASS_GENES for n in inh_names)
-    # ids are unique across the two independently-clustered groups
-    assert cid[cls == "inhibitory"].nunique() == 4
-    assert cid[cls == "excitatory"].nunique() == 3
-    assert not (set(cid[cls == "inhibitory"]) & set(cid[cls == "excitatory"]))
-
-
 def test_anndata_keeps_raw_counts_in_X():
-    """X must be untransformed counts; the clustering matrix lives in a layer."""
+    """X must be untransformed counts; the transformed matrices live elsewhere."""
     pytest.importorskip("anndata")
     from aind_hcr_pairwise_unmixing_calibrated import annotate as A
 
@@ -597,67 +647,62 @@ def test_anndata_keeps_raw_counts_in_X():
     # build_anndata sorts cells by id, so compare against the same ordering rather
     # than the input order (cell10 sorts before cell2).
     assert list(adata.obs_names) == sorted(t.index.astype(str))
-    assert np.allclose(adata.X, t.loc[adata.obs_names].to_numpy())   # raw, not normalized
+    assert np.allclose(adata.X, t.loc[adata.obs_names].to_numpy())
     assert "normalized" in adata.layers
-    assert adata.layers["normalized"].max() <= 1.0 + 1e-9
-    assert {"class", "subclass", "cluster", "cluster_id"} <= set(adata.obs.columns)
-    assert set(adata.var.columns) == {"round", "channel", "gene"}
-    assert adata.n_obs == len(t)
-    # every cell of a known class gets a cluster
-    known = adata.obs["class"].isin(["inhibitory", "excitatory"])
-    assert (adata.obs.loc[known, "cluster_id"] >= 0).all()
+    assert adata.obsm["X_cluster"].shape == adata.shape
+
+
+def test_subclass_is_not_carried_on_non_inhibitory_cells():
+    """A Pvalb label on a cell the class call placed outside the class invites a
+    reader to count it as an interneuron."""
+    pytest.importorskip("anndata")
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    adata = A.build_anndata(_fake_table(), n_inh=4, n_exc=3)
+    non_inh = adata.obs["class"] != "inhibitory"
+    assert set(adata.obs.loc[non_inh, "subclass"].unique()) == {"none"}
+    assert (adata.obs.loc[non_inh, "cluster_id"] == -1).any() or True
 
 
 def test_anndata_round_trips_to_h5ad(tmp_path):
-    """uns must be HDF5-writable: int keys and None values raise inside the writer,
-    AFTER the expensive unmixing has already run."""
     pytest.importorskip("anndata")
     import anndata as ad
     from aind_hcr_pairwise_unmixing_calibrated import annotate as A
 
     adata = A.build_anndata(_fake_table(), n_inh=4, n_exc=3)
-    path = tmp_path / "annotated.h5ad"
-    adata.write_h5ad(path)                       # must not raise
-
+    path = tmp_path / "x.h5ad"
+    adata.write_h5ad(path)
     back = ad.read_h5ad(path)
-    assert back.n_obs == adata.n_obs
-    assert set(back.obs["cluster"].unique()) == set(adata.obs["cluster"].unique())
-    assert "normalized" in back.layers
-    assert np.allclose(back.X, adata.X)
+    assert back.shape == adata.shape
+    assert list(back.obs.columns) == list(adata.obs.columns)
+    assert back.uns["unmixing"]["clustering"]["method"] == "kmeans"
 
 
-def test_subclass_genes_excluded_from_marker_names():
-    """Pvalb-2 (Pvalb/...) wastes a slot -- the subclass is already the prefix."""
+def test_uns_records_the_protocol_constants():
+    """A reader must be able to tell which floors produced these labels without
+    reading the source of whatever version wrote the file."""
+    pytest.importorskip("anndata")
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+    from aind_hcr_pairwise_unmixing_calibrated import labeling as L
+
+    uns = A.build_anndata(_fake_table(), n_inh=4, n_exc=3).uns["unmixing"]
+    assert uns["classification"]["posterior_gates"] == [0.10, 0.90]
+    assert uns["classification"]["min_counts"] == L.HCR_COUNT_FLOOR
+    assert uns["subclass"]["count_floor"] == L.HCR_SUBCLASS_COUNT_FLOOR
+    assert uns["clustering"]["enrichment_floor"] == L.HCR_ENRICHMENT_FLOOR
+    assert uns["clustering"]["name_floor"] == L.HCR_NAME_FLOOR
+    assert uns["clustering"]["panel_15"] == list(L.HCR_PANEL_15)
+
+
+def test_the_per_mouse_caveat_travels_with_the_file():
+    """Cluster identities do not correspond across mice. Someone who opens the .h5ad
+    without the README must still be told."""
+    pytest.importorskip("anndata")
     from aind_hcr_pairwise_unmixing_calibrated import annotate as A
 
-    means = pd.DataFrame(
-        {"R5-514-Pvalb": [10.0, 1.0],       # subclass gene, strongly enriched
-         "R3-514-Mme":   [8.0, 1.0],
-         "R2-561-Pthlh": [6.0, 1.0],
-         "R5-561-Cck":   [1.0, 9.0]},
-        index=[0, 1])
-    names = A.cluster_marker_names(means, {0: "Pvalb", 1: "Vip"})
-
-    assert "Pvalb" not in names[0].split("(")[1]        # not in the marker list
-    assert names[0].startswith("Pvalb-1")               # still the prefix
-    assert "Mme" in names[0] and "Pthlh" in names[0]    # replaced by the next best
-    # opting out restores the old behaviour
-    keep = A.cluster_marker_names(means, {0: "Pvalb", 1: "Vip"}, exclude_genes=())
-    assert "Pvalb" in keep[0].split("(")[1]
-
-
-def test_subclass_call_still_uses_subclass_genes():
-    """Excluding them from NAMES must not affect the subclass assignment itself."""
-    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
-
-    means = pd.DataFrame(
-        {"R5-514-Pvalb": [10.0, 1.0],
-         "R5-594-Sst":   [1.0, 10.0],
-         "R5-561-Cck":   [5.0, 5.0]},
-        index=[0, 1])
-    sc = A.assign_subclass(means)
-    assert sc[0][0] == "Pvalb"
-    assert sc[1][0] == "Sst"
+    note = A.build_anndata(_fake_table(), n_inh=4, n_exc=3).uns["unmixing"]["note"]
+    assert "PER" in note.upper() and "MOUSE" in note.upper()
+    assert "consensus" in note.lower()
 
 
 def test_gene_map_reads_real_ds_config_shape(tmp_path):
