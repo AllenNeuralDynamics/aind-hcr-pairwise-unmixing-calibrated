@@ -130,6 +130,32 @@ def gene_map_for_round(asset_dir, mouse_id, round_key):
     return out
 
 
+def _code_provenance():
+    """Package version and git commit of the code actually executing.
+
+    A capsule checked out on a stale branch runs old code and says nothing about it:
+    the only symptom is label counts that silently match a previous version. Printing
+    the version and commit in the run header makes that visible in the log, which is
+    the one artefact you still have after the fact.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import __version__
+    import subprocess
+    parts = [f"v{__version__}"]
+    try:
+        out = subprocess.run(["git", "-C", str(_PKG_PARENT), "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=10)
+        branch = subprocess.run(["git", "-C", str(_PKG_PARENT), "rev-parse",
+                                 "--abbrev-ref", "HEAD"],
+                                capture_output=True, text=True, timeout=10)
+        if out.returncode == 0 and out.stdout.strip():
+            parts.append(out.stdout.strip())
+        if branch.returncode == 0 and branch.stdout.strip():
+            parts.append(f"branch {branch.stdout.strip()}")
+    except (OSError, subprocess.SubprocessError):
+        pass          # not a checkout, or no git in the image -- the version still prints
+    return " · ".join(parts)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--mouse-id", required=True)
@@ -188,6 +214,7 @@ def main(argv=None):
         raise SystemExit(f"no rounds with mixed_spots_*.pkl under {asset}")
     gene_maps = {r: gene_map_for_round(asset, args.mouse_id, r) for r in rounds}
 
+    print(f"code    : {_code_provenance()}")
     print(f"mouse   : {args.mouse_id}")
     print(f"asset   : {asset.name}")
     print(f"rounds  : {', '.join(rounds)}")
