@@ -399,6 +399,12 @@ def main(argv=None):
     gene_maps = {r: gene_map_for_round(asset, args.mouse_id, r,
                                        processed_root=args.processed_root or data_dir)
                  for r in rounds}
+    # Correct wrong gene symbols at the boundary where the map enters the run. Both
+    # known errors (Tac, Slac17a7) originate in the acquisition metadata, and the map
+    # feeds more than the cell x gene table -- *_spot_change.csv takes its `gene`
+    # column straight from here.
+    from aind_hcr_pairwise_unmixing_calibrated.annotate import correct_gene_map
+    gene_maps = {r: correct_gene_map(gene_maps[r], round_key=r)[0] for r in rounds}
 
     print(f"code    : {_code_provenance()}")
     print(f"mouse   : {args.mouse_id}")
