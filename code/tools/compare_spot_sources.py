@@ -110,6 +110,65 @@ def label_flips(pw, pr, shared):
     return cls_tab, sub_tab, agree, out
 
 
+def check_cells(wanted, pw, pr, genes):
+    """Membership of a named cell set in each arm, and what the verdict means.
+
+    Written for one question: a set of cells present in an upstream table but absent
+    from a shipped cell x gene table. There are three outcomes and they point at
+    different causes, so the useful output is the partition, not a single number.
+
+        in BOTH arms        the cells are not missing from unmixing at all. Whatever
+                            dropped them happened downstream, or the two tables use
+                            different id spaces and the join is what failed.
+        PROCESSED only      confirmed: the pairwise step never loaded spots for these
+                            cells, because its ROI filter had already removed them.
+                            Reading the processed table recovers them.
+        NEITHER arm         not an ROI-filter effect. The cell x gene table is a pivot
+                            over detected spots, so a cell with no spots above
+                            threshold in any round has no row -- and coregistration
+                            selects cells on in vivo evidence, not on HCR signal, so
+                            a coregistered cell with no transcripts detected is a
+                            normal outcome rather than a loss.
+    """
+    wanted = pd.Index(pd.unique(pd.Series(wanted).astype(str)))
+    in_pw, in_pr = wanted.isin(pw.index), wanted.isin(pr.index)
+    both = wanted[in_pw & in_pr]
+    pr_only = wanted[~in_pw & in_pr]
+    pw_only = wanted[in_pw & ~in_pr]
+    neither = wanted[~in_pw & ~in_pr]
+
+    rows = [dict(group="requested", n=len(wanted), median_total_counts=np.nan),
+            dict(group="in both arms", n=len(both),
+                 median_total_counts=float(np.median(
+                     pr.loc[both, genes].to_numpy().sum(1))) if len(both) else np.nan),
+            dict(group="processed arm ONLY (ROI filter recovered)", n=len(pr_only),
+                 median_total_counts=float(np.median(
+                     pr.loc[pr_only, genes].to_numpy().sum(1))) if len(pr_only) else np.nan),
+            dict(group="pairwise arm only", n=len(pw_only),
+                 median_total_counts=float(np.median(
+                     pw.loc[pw_only, genes].to_numpy().sum(1))) if len(pw_only) else np.nan),
+            dict(group="in NEITHER arm", n=len(neither), median_total_counts=np.nan)]
+    return pd.DataFrame(rows), dict(both=both, processed_only=pr_only,
+                                    pairwise_only=pw_only, neither=neither)
+
+
+def load_cell_list(path, column=None):
+    """Cell ids from a one-per-line list, or from a named or guessed column of a CSV."""
+    p = Path(path)
+    txt = p.read_text().splitlines()
+    if column is None and len(txt) > 1 and "," not in txt[0]:
+        return [s.strip() for s in txt if s.strip()]
+    t = pd.read_csv(p)
+    if column is not None:
+        return t[column].astype(str).tolist()
+    for cand in ("cell_id", "hcr_id", "roi_id", "cell", "id"):
+        if cand in t.columns:
+            print(f"  --cells: using column '{cand}' ({len(t)} rows)")
+            return t[cand].astype(str).tolist()
+    raise SystemExit(
+        f"{path}: pass --cells-column; no obvious id column among {list(t.columns)[:12]}")
+
+
 def _plot(pw, pr, shared, added, genes):
     import matplotlib
     matplotlib.use("Agg")
@@ -159,6 +218,14 @@ def main(argv=None):
     ap.add_argument("--out", default="compare")
     ap.add_argument("--no-labels", action="store_true",
                     help="skip class/subclass comparison (needs both class markers)")
+    ap.add_argument("--cells", default=None, metavar="FILE",
+                    help="CSV or one-per-line list of cell ids to test for membership "
+                         "in each arm. Use this to ask whether a specific set of cells "
+                         "-- e.g. coregistered cells absent from a shipped cell x gene "
+                         "table -- is absent because the pairwise step's ROI filter "
+                         "removed them. See check_cells().")
+    ap.add_argument("--cells-column", default=None,
+                    help="column holding the cell id, when --cells is a wide CSV")
     args = ap.parse_args(argv)
 
     outp = Path(args.out)
@@ -192,6 +259,27 @@ def main(argv=None):
             print(cls_tab.to_string())
         except Exception as exc:          # a single round has no marker pair
             print(f"\nlabel comparison skipped: {type(exc).__name__}: {exc}")
+
+    if args.cells:
+        wanted = load_cell_list(args.cells, args.cells_column)
+        verdict, groups = check_cells(wanted, pw, pr, genes)
+        verdict.to_csv(outp / "cells_of_interest_verdict.csv", index=False)
+        for name, idx in groups.items():
+            if len(idx):
+                pd.Series(idx, name="cell_id").to_csv(
+                    outp / f"cells_{name}.csv", index=False)
+        print("\n" + verdict.to_string(index=False))
+        n_rec = len(groups["processed_only"])
+        n_none = len(groups["neither"])
+        if n_rec:
+            print(f"\n=> {n_rec} of these cells exist in the processed arm and NOT in the "
+                  f"pairwise arm: the pairwise step's ROI filter is why they were absent.")
+        if n_none:
+            print(f"=> {n_none} are in neither arm: not an ROI-filter effect. Either they "
+                  f"have no spots above threshold in this round, or the id spaces differ.")
+        if len(groups["both"]):
+            print(f"=> {len(groups['both'])} are in BOTH arms, so unmixing did not drop "
+                  f"them; look downstream of the cell x gene table, or at the join.")
 
     fig = _plot(pw, pr, shared, added, genes)
     fig.savefig(outp / "arm_comparison.png", dpi=150, bbox_inches="tight")
