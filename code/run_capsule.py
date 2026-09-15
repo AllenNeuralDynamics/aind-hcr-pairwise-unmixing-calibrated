@@ -25,19 +25,28 @@ Not for its results. This capsule re-derives every spot decision from `mixed_spo
 and reads none of that asset's `unmixed_*` outputs -- they are the previous method's
 answer to the same question. It is required as the container of two inputs:
 
-  mixed_spots_<R>.pkl   also present in the processed asset, under
-                        image_spot_spectral_unmixing/, with the round in the filename.
-                        This part of the dependency is removable, but the two copies
-                        are not the same size (800792: 5.55 GB here against 8.73 GB
-                        there for R1, and about 2x for R2-R6), so they are not
-                        interchangeable without checking what the extra bytes are.
+  mixed_spots_<R>.pkl   also in the processed asset, under
+                        image_spot_spectral_unmixing/, with the round in the filename
+                        -- but it is a DIFFERENT table, not a copy. Same spots to
+                        within 2-4%, twice the bytes per row: 221 B/row there against
+                        110 B/row here for a 5-channel round, and 149 against 99 for
+                        2-channel R1. Fitting those, the processed table carries about
+                        three extra float64 columns PER CHANNEL that the pairwise
+                        table drops. Switching inputs is a schema change, not a path
+                        change.
 
   ds_config.json        GENE_DICT, the round -> channel -> gene map, e.g.
-                        {"1": {"488": "GFP", "561": "Slc17a7"}}. This exists ONLY
-                        here. A processed asset's acquisition.json contains no gene
-                        symbol anywhere, so without ds_config.json the channels
-                        cannot be named and no cell x gene table can be built. This
-                        is the hard dependency, and it is a ~1 KB file.
+                        {"1": {"488": "GFP", "561": "Slc17a7"}}.
+
+GENE_DICT is NOT original to this asset: it is `manifest.gene_dict` flattened, and
+`manifest` is a byte-identical copy of the processed asset's own
+processing_manifest.json -- which also carries `round`. So the gene map is fully
+derivable from the processed assets, and `gene_map_from_manifests` does that when
+ds_config.json is absent. ds_config.json stays the primary source because it is what
+the spot tables were produced with; if the two ever disagree, the spot tables follow
+it. (An earlier version of this docstring claimed the gene map existed only here.
+That was wrong: it was checked against acquisition.json, which indeed carries no gene
+symbol, and processing_manifest.json was never opened.)
 """
 import argparse
 import json
@@ -95,13 +104,14 @@ def find_asset(mouse_id, data_dir=DATA_DIR):
             "",
             "Attach the pairwise-unmixing asset for this mouse and re-run.",
             "",
-            "The _processed_ assets are NOT a substitute, though the reason is narrower",
-            "than it looks. They do carry a copy of the spot tables, at",
+            "What this asset uniquely provides is the spot tables. The processed assets",
+            "hold a table of the same name at",
             "  <processed asset>/image_spot_spectral_unmixing/mixed_spots_<R>.pkl,",
-            "with the round in the filename. What they do not carry is the round-to-gene",
-            "map: GENE_DICT lives only in ds_config.json, in this asset, and no gene",
-            "symbol appears anywhere in a processed asset's acquisition.json. Without it",
-            "the channels cannot be named and there is no cell x gene table to build.",
+            "but it is a different table -- same spots to within a few percent, twice",
+            "the bytes per row, about three extra float64 columns per channel. The gene",
+            "map is NOT unique to this asset: GENE_DICT is processing_manifest.json's",
+            "gene_dict flattened, and this script falls back to reading that directly",
+            "from the processed assets when ds_config.json is missing.",
             "",
         ]))
     if len(hits) > 1:
@@ -116,9 +126,49 @@ def discover_rounds(asset_dir, mouse_id):
     return sorted(rounds, key=lambda r: int(r[1:]))
 
 
-def gene_map_for_round(asset_dir, mouse_id, round_key):
-    """{channel: gene} from the round's ds_config manifest."""
+def gene_map_from_manifests(round_key, processed_root):
+    """{channel: gene} for a round, from the PROCESSED assets' processing_manifest.json.
+
+    `ds_config.json`'s GENE_DICT is not original: it is `manifest.gene_dict` flattened
+    to {round: {channel: gene}}, and `manifest` is a byte-identical copy of the
+    processed asset's own `processing_manifest.json` (checked for 800792 R1 and R5).
+    That file carries `round` as well, so a round's gene map can be read straight from
+    the processed assets with no pairwise-unmixing asset involved.
+
+    Used as a fallback when ds_config.json is absent. Kept as a fallback rather than
+    the primary source because ds_config.json is what the spot tables were produced
+    with, and if the two ever disagree the spot tables follow ds_config.
+    """
+    root = Path(processed_root)
+    want = int("".join(ch for ch in round_key if ch.isdigit()))
+    for man in sorted(root.glob("*/processing_manifest.json")):
+        try:
+            with open(man) as fh:
+                m = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if int(m.get("round", -1)) != want:
+            continue
+        gd = m.get("gene_dict") or {}
+        out = {str(c): str(v["gene"]) for c, v in gd.items()
+               if isinstance(v, dict) and v.get("gene")}
+        if out:
+            print(f"  {round_key}: gene map from {man.parent.name}/processing_manifest.json")
+            return out
+    return {}
+
+
+def gene_map_for_round(asset_dir, mouse_id, round_key, processed_root=None):
+    """{channel: gene} for a round: ds_config.json, else the processed asset's manifest."""
     cfg_path = asset_dir / f"{mouse_id}_{round_key}" / "ds_config.json"
+    if not cfg_path.exists():
+        out = gene_map_from_manifests(round_key, processed_root or asset_dir.parent)
+        if out:
+            return out
+        raise SystemExit(
+            f"no gene map for {round_key}: {cfg_path} is absent and no "
+            f"processing_manifest.json under {processed_root or asset_dir.parent} "
+            f"declares round {round_key}.")
     with open(cfg_path) as fh:
         cfg = json.load(fh)
     # Real ds_config.json files use GENE_DICT (uppercase), keyed by ROUND NUMBER as a
@@ -346,7 +396,9 @@ def main(argv=None):
                   f"class labels need R1 (Slc17a7) and R4 (Gad2).")
     if not rounds:
         raise SystemExit(f"no rounds with mixed_spots_*.pkl under {asset}")
-    gene_maps = {r: gene_map_for_round(asset, args.mouse_id, r) for r in rounds}
+    gene_maps = {r: gene_map_for_round(asset, args.mouse_id, r,
+                                       processed_root=args.processed_root or data_dir)
+                 for r in rounds}
 
     print(f"code    : {_code_provenance()}")
     print(f"mouse   : {args.mouse_id}")

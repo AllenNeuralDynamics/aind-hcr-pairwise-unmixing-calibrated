@@ -1493,7 +1493,7 @@ def _run_mouse_kwargs_from_argv(argv):
     rc.pipeline.run_mouse = fake_run_mouse
     rc.find_asset = lambda mouse_id, data_dir: _P("/tmp/asset")
     rc.discover_rounds = lambda asset, mouse_id: ["R1", "R4"]
-    rc.gene_map_for_round = lambda asset, mouse_id, r: {"488": "GFP"}
+    rc.gene_map_for_round = lambda asset, mouse_id, r, **kw: {"488": "GFP"}
     rc.pipeline.round_inputs_from_asset = lambda *a, **k: (None, None)
     try:
         rc.main(argv)
@@ -1779,3 +1779,39 @@ def test_relabel_names_the_other_mice_it_found(tmp_path):
     (root / "800995_cellxgene.csv").write_text("cell_id\nc0\n")
     with _pytest.raises(SystemExit, match="800995_cellxgene.csv"):
         run_capsule.find_cellxgene(root, "800792")
+
+
+def test_gene_map_falls_back_to_the_processed_manifest(tmp_path):
+    """ds_config.json's GENE_DICT is manifest.gene_dict flattened, and that manifest is
+    a copy of the processed asset's own processing_manifest.json -- which carries the
+    round number too. So a round's gene map is readable without the pairwise asset."""
+    import run_capsule
+
+    data = tmp_path / "data"
+    (data / "HCR_800792_pairwise-unmixing_x" / "800792_R5").mkdir(parents=True)
+    (data / "HCR_800792_2026-04-08_processed_y").mkdir(parents=True)
+    (data / "HCR_800792_2026-04-08_processed_y" / "processing_manifest.json").write_text(
+        json.dumps({"round": 5, "spot_channels": ["488", "514"],
+                    "gene_dict": {"488": {"gene": "Npy", "round": 5},
+                                  "514": {"gene": "Pvalb", "round": 5}}}))
+    got = run_capsule.gene_map_for_round(
+        data / "HCR_800792_pairwise-unmixing_x", "800792", "R5", processed_root=data)
+    assert got == {"488": "Npy", "514": "Pvalb"}
+
+
+def test_gene_map_prefers_ds_config_when_present(tmp_path):
+    """ds_config.json is what the spot tables were produced with; if the two ever
+    disagree the spot tables follow it, so it stays the primary source."""
+    import run_capsule
+
+    data = tmp_path / "data"
+    rd = data / "HCR_800792_pairwise-unmixing_x" / "800792_R5"
+    rd.mkdir(parents=True)
+    (rd / "ds_config.json").write_text(
+        json.dumps({"GENE_DICT": {"5": {"488": "Npy"}}, "ROUND_N": "5"}))
+    (data / "proc").mkdir()
+    (data / "proc" / "processing_manifest.json").write_text(
+        json.dumps({"round": 5, "gene_dict": {"488": {"gene": "WRONG"}}}))
+    got = run_capsule.gene_map_for_round(
+        data / "HCR_800792_pairwise-unmixing_x", "800792", "R5", processed_root=data)
+    assert got == {"488": "Npy"}

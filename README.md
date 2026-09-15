@@ -1115,15 +1115,47 @@ one of them is a real constraint:
 
 | input | also available elsewhere? |
 |---|---|
-| `mixed_spots_<R>.pkl` | **Yes** — each processed asset carries a copy at `image_spot_spectral_unmixing/mixed_spots_<R>.pkl`, with the round in the filename. But the copies are not the same size: on 800792, 5.55 GB in the pairwise asset against 8.73 GB in the processed asset for R1, and roughly 2× for R2–R6. Whatever those extra bytes are, the two are not interchangeable until someone checks. |
-| `ds_config.json` | **No.** `GENE_DICT` — the round → channel → gene map, e.g. `{"1": {"488": "GFP", "561": "Slc17a7"}}` — exists only here. A processed asset's `acquisition.json` contains no gene symbol anywhere, so without this file the channels cannot be named and there is no cell × gene table to build. |
+| `mixed_spots_<R>.pkl` | **A table of the same name exists in each processed asset** (`image_spot_spectral_unmixing/`, round in the filename) — but it is not the same table. See below. |
+| `ds_config.json` | **Yes, derivable.** `GENE_DICT` is `manifest.gene_dict` flattened, and `manifest` is a byte-identical copy of the processed asset's own `processing_manifest.json`, which carries `round` too. `gene_map_from_manifests` reads it directly when `ds_config.json` is absent. |
 
-So the hard dependency is a **~1 KB JSON file**, not the 30 GB of spot tables beside it.
-Two ways to drop it, if the per-mouse mount list is the thing that needs simplifying:
-carry the gene map in the repo (it is per mouse and per round, and would then be
-versioned with the code rather than read from data), or pass it as a run parameter. Both
-move a piece of experimental metadata into the code, which is why neither has been done
-yet — worth deciding deliberately rather than by convenience.
+`ds_config.json` stays the **primary** source of the gene map, because it is the file the
+spot tables were produced with — if the two ever disagree, the spot tables follow it. The
+manifest is the fallback, not a replacement.
+
+#### The two spot tables are not copies
+
+Same object type — a pandas DataFrame, one row per detected spot — and nearly the same
+rows, but **twice the bytes per row**:
+
+| round | channels | rows (processed / pairwise) | B/row processed | B/row pairwise |
+|---|---|---|---|---|
+| R1 | 2 | 58.6 M / 56.3 M (96.1%) | 149.0 | 98.6 |
+| R2 | 5 | 11.6 M / 11.3 M (98.0%) | 221.0 | 109.5 |
+| R3 | 5 | 23.2 M / 22.7 M (97.7%) | 221.0 | 109.8 |
+| R4 | 5 | 27.4 M / 27.0 M (98.4%) | 221.0 | 109.9 |
+| R5 | 5 | 27.8 M / 27.3 M (98.2%) | 221.0 | 110.1 |
+| R6 | 5 | 29.1 M / 28.6 M (98.3%) | 221.0 | 109.9 |
+
+Row counts explain 2–4%, not the 2×. Bytes per row are constant within each family and
+differ only with channel count, so both schemas are fixed: solving the two-channel and
+five-channel cases gives 101 + 24·n_channels bytes/row for the processed table against
+91 + 3.8·n_channels for the pairwise one. **The processed table carries roughly three
+extra float64 columns per imaged channel** that the pairwise table drops; the fixed part
+is nearly the same in both. The pairwise table also stores the spot ID as a pandas
+`Categorical` of `<channel>_<index>` strings rather than plain objects.
+
+The processed row counts are confirmed independently: `round_1_summary_stats.csv` in the
+same folder reports 10,336,201 GFP + 48,280,431 Slc17a7 spots, which is exactly the
+58,616,632 rows read out of the pickle header.
+
+So swapping the capsule's spot input to the processed assets is a **schema change, not a
+path change** — a different column set and 2–4% more spots, which would move the cell ×
+gene table. It needs a matched-output run on one round before it is a change worth
+making, not a config edit.
+
+All of the above was measured with HTTP range requests over the pickle headers and a
+walker that skips payload bytes: about 3 MB read out of 30 GB of spot tables, nothing
+downloaded whole.
 
 Run parameters, e.g. `--mouse-id 800995 --experimenter "Your Name"`. Rounds default to
 every round found, which is what you want.
