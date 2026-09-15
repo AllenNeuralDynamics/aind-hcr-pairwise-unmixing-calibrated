@@ -18,6 +18,26 @@ Inputs expected under /root/capsule/data:
 The processed asset for a round is resolved from that round's ds_config.json
 `dataset_folder`. There are often two processed assets per round and only one matches
 the spot set; picking by timestamp silently produces a bad join.
+
+WHY THE PAIRWISE-UNMIXING ASSET IS STILL REQUIRED
+-------------------------------------------------
+Not for its results. This capsule re-derives every spot decision from `mixed_spots`
+and reads none of that asset's `unmixed_*` outputs -- they are the previous method's
+answer to the same question. It is required as the container of two inputs:
+
+  mixed_spots_<R>.pkl   also present in the processed asset, under
+                        image_spot_spectral_unmixing/, with the round in the filename.
+                        This part of the dependency is removable, but the two copies
+                        are not the same size (800792: 5.55 GB here against 8.73 GB
+                        there for R1, and about 2x for R2-R6), so they are not
+                        interchangeable without checking what the extra bytes are.
+
+  ds_config.json        GENE_DICT, the round -> channel -> gene map, e.g.
+                        {"1": {"488": "GFP", "561": "Slc17a7"}}. This exists ONLY
+                        here. A processed asset's acquisition.json contains no gene
+                        symbol anywhere, so without ds_config.json the channels
+                        cannot be named and no cell x gene table can be built. This
+                        is the hard dependency, and it is a ~1 KB file.
 """
 import argparse
 import json
@@ -73,10 +93,15 @@ def find_asset(mouse_id, data_dir=DATA_DIR):
             f"Attached assets ({len(present)}):",
             *[f"  {n}" for n in present],
             "",
-            "Attach the pairwise-unmixing asset for this mouse and re-run. The",
-            "_processed_ assets alone are not sufficient: they carry acquisition.json",
-            "and image_spot_detection, but the newest generations do not include the",
-            "spot tables, and nothing in them maps an imaging date to a round number.",
+            "Attach the pairwise-unmixing asset for this mouse and re-run.",
+            "",
+            "The _processed_ assets are NOT a substitute, though the reason is narrower",
+            "than it looks. They do carry a copy of the spot tables, at",
+            "  <processed asset>/image_spot_spectral_unmixing/mixed_spots_<R>.pkl,",
+            "with the round in the filename. What they do not carry is the round-to-gene",
+            "map: GENE_DICT lives only in ds_config.json, in this asset, and no gene",
+            "symbol appears anywhere in a processed asset's acquisition.json. Without it",
+            "the channels cannot be named and there is no cell x gene table to build.",
             "",
         ]))
     if len(hits) > 1:

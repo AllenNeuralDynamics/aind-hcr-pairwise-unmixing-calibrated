@@ -1106,6 +1106,25 @@ dependencies.
 | `HCR_<mouse>_pairwise-unmixing_<date>` | the spot tables: `<mouse>_<R>/mixed_spots_<R>.pkl` and `ds_config.json` |
 | `HCR_<mouse>_<date>_processed_<date>` | `acquisition.json` (laser power, **required**), `image_spot_detection/` (fg/bg), and the schema files carried into the derived asset |
 
+### Why the pairwise-unmixing asset is still required
+
+**Not for its results.** This capsule re-derives every spot decision from `mixed_spots`
+and reads none of that asset's `unmixed_*` outputs — those are the previous method's
+answer to the same question. It needs the asset as the container of two inputs, and only
+one of them is a real constraint:
+
+| input | also available elsewhere? |
+|---|---|
+| `mixed_spots_<R>.pkl` | **Yes** — each processed asset carries a copy at `image_spot_spectral_unmixing/mixed_spots_<R>.pkl`, with the round in the filename. But the copies are not the same size: on 800792, 5.55 GB in the pairwise asset against 8.73 GB in the processed asset for R1, and roughly 2× for R2–R6. Whatever those extra bytes are, the two are not interchangeable until someone checks. |
+| `ds_config.json` | **No.** `GENE_DICT` — the round → channel → gene map, e.g. `{"1": {"488": "GFP", "561": "Slc17a7"}}` — exists only here. A processed asset's `acquisition.json` contains no gene symbol anywhere, so without this file the channels cannot be named and there is no cell × gene table to build. |
+
+So the hard dependency is a **~1 KB JSON file**, not the 30 GB of spot tables beside it.
+Two ways to drop it, if the per-mouse mount list is the thing that needs simplifying:
+carry the gene map in the repo (it is per mouse and per round, and would then be
+versioned with the code rather than read from data), or pass it as a run parameter. Both
+move a piece of experimental metadata into the code, which is why neither has been done
+yet — worth deciding deliberately rather than by convenience.
+
 Run parameters, e.g. `--mouse-id 800995 --experimenter "Your Name"`. Rounds default to
 every round found, which is what you want.
 
