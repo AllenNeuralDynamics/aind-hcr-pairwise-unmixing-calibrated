@@ -1753,3 +1753,29 @@ def test_tac1_sorts_into_its_standard_position_not_the_tail():
     adata.var.loc[adata.var.index[0], "gene"] = "Tac"
     legacy = [adata.var.loc[c, "gene"] for c in P.gene_order(adata.var, "std")]
     assert legacy.index("Tac") == legacy.index("Tac2") - 1
+
+
+def test_relabel_finds_the_csv_in_a_mounted_asset_layout(tmp_path):
+    """A registered asset mounts as /data/<asset-name>/<mouse>_cellxgene.csv, one level
+    down, so --relabel-from must accept a directory and search it."""
+    import run_capsule
+
+    root = tmp_path / "data"
+    (root / "HCR_800792_unmixed-calibrated_2026-08-20").mkdir(parents=True)
+    csv = root / "HCR_800792_unmixed-calibrated_2026-08-20" / "800792_cellxgene.csv"
+    csv.write_text("cell_id,R1-561-Slc17a7\nc0,5\n")
+    assert run_capsule.find_cellxgene(root, "800792") == csv
+    assert run_capsule.find_cellxgene(csv, "800792") == csv
+
+
+def test_relabel_names_the_other_mice_it_found(tmp_path):
+    """Pointing at the wrong mouse's asset is the likely mistake, so say which mouse
+    is actually there rather than just reporting a missing file."""
+    import pytest as _pytest
+    import run_capsule
+
+    root = tmp_path / "data"
+    root.mkdir()
+    (root / "800995_cellxgene.csv").write_text("cell_id\nc0\n")
+    with _pytest.raises(SystemExit, match="800995_cellxgene.csv"):
+        run_capsule.find_cellxgene(root, "800792")

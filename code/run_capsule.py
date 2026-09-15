@@ -156,6 +156,89 @@ def _code_provenance():
     return " · ".join(parts)
 
 
+def find_cellxgene(path, mouse_id):
+    """Resolve --relabel-from to a cell x gene CSV.
+
+    Accepts the file itself, or a directory to search: a previous run's results, or
+    the registered asset for one mounted under /data. Searched recursively because a
+    mounted asset puts the CSV one level down, in a folder named for the asset.
+    """
+    path = Path(path)
+    if path.is_file():
+        return path
+    if not path.is_dir():
+        raise SystemExit(f"--relabel-from: {path} does not exist")
+    wanted = f"{mouse_id}_cellxgene.csv"
+    hits = sorted(p for p in path.rglob(wanted) if p.is_file())
+    if not hits:
+        others = sorted({p.name for p in path.rglob("*_cellxgene.csv")})
+        raise SystemExit(
+            f"--relabel-from: no {wanted} under {path}."
+            + (f" Found for other mice: {', '.join(others)}" if others else
+               " Nothing matching *_cellxgene.csv is there either."))
+    if len(hits) > 1:
+        print(f"NOTE: {len(hits)} copies of {wanted} under {path}; using the newest.")
+        hits.sort(key=lambda p: p.stat().st_mtime)
+    return hits[-1]
+
+
+def relabel(args):
+    """Rebuild class, subclass and cluster labels from an existing cell x gene table.
+
+    The labelling is a minute of work on a table the unmixing took an hour to produce,
+    so iterating on label rules should not re-run the unmixing. This reads the counts
+    back and writes a new .h5ad and figures beside them.
+
+    Deliberately does NOT write metadata or an asset manifest: the counts came from a
+    run whose provenance is already recorded, and a second processing.json describing
+    the same spot decisions would misrepresent what happened. Keep the original asset
+    and note the relabelling commit.
+    """
+    import pandas as pd
+    from aind_hcr_pairwise_unmixing_calibrated import annotate
+    from aind_hcr_pairwise_unmixing_calibrated import plots as _plots
+
+    csv = find_cellxgene(args.relabel_from, args.mouse_id)
+    out = Path(args.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    print(f"code    : {_code_provenance()}")
+    print(f"mouse   : {args.mouse_id}")
+    print(f"relabel : {csv}")
+    print("unmixing: SKIPPED (--relabel-from); counts are read, not re-derived")
+
+    table = pd.read_csv(csv, index_col=0)
+    rounds = sorted({str(c).split("-")[0] for c in table.columns})
+    print(f"rounds  : {', '.join(rounds)}")
+    print(f"cell x gene: {table.shape[0]:,} cells x {table.shape[1]} gene-rounds")
+
+    adata = annotate.build_anndata(
+        table, extra_uns=dict(mouse_id=args.mouse_id, rounds=rounds,
+                              relabelled_from=str(csv)))
+    h5 = out / f"{args.mouse_id}_cellxgene_annotated.h5ad"
+    adata.write_h5ad(h5)
+    def counts(col):
+        return {k: int(v) for k, v in adata.obs[col].value_counts().items() if v}
+
+    print(f"\nannotated: {h5.name}  {adata.n_obs:,} cells x {adata.n_vars} genes")
+    print(f"  class   : {counts('class')}")
+    print(f"  subclass: {counts('subclass')}")
+    n_cl = int((adata.obs["cluster_id"] >= 0).sum())
+    print(f"  clusters: {adata.obs.loc[adata.obs.cluster_id >= 0, 'cluster'].nunique()}"
+          f" over {n_cl:,} classified cells")
+    inh = adata.uns["unmixing"]["clustering"].get("inhibitory", {})
+    if inh.get("block"):
+        from collections import Counter
+        print(f"  blocks  : {dict(Counter(inh['block'].values()))}")
+
+    if not args.no_plots:
+        written = _plots.write_plots(adata, out, args.mouse_id, rounds)
+        print(f"\nplots: {len(written)} figures in results/plots/")
+    print("\nNo metadata or asset manifest written -- the counts belong to the original "
+          "run. Keep that asset and record this commit as the labelling version.")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--mouse-id", required=True)
@@ -188,7 +271,18 @@ def main(argv=None):
                          "several processed assets exist and you know which one you want.")
     ap.add_argument("--processed-root", default=None,
                     help="parent dir of processed assets; default = --data-dir")
+    ap.add_argument("--relabel-from", default=None, metavar="PATH",
+                    help="skip the unmixing entirely and rebuild ONLY the labels from "
+                         "an existing <mouse>_cellxgene.csv. PATH is that file or the "
+                         "directory holding it (a previous run's results, or its "
+                         "registered asset under /data). Writes the annotated .h5ad and "
+                         "the figures; takes about a minute instead of an hour. Nothing "
+                         "here re-derives spot decisions, so the cell x gene counts are "
+                         "exactly the ones the unmixing produced.")
     args = ap.parse_args(argv)
+
+    if args.relabel_from:
+        return relabel(args)
 
     data_dir = Path(args.data_dir)
     asset = find_asset(args.mouse_id, data_dir)

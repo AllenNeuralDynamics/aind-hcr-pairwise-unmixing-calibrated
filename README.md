@@ -320,6 +320,34 @@ Everything is written by default. The `--no-*` flags each drop one output:
 | `--no-metadata` | `processing.json`, `data_description.json`, `asset_manifest.json`, copied schema files | Provenance, and the ability to register the result as an asset. |
 | `--no-fgbg` | the `fg`/`bg` columns in the spot tables | Foreground/background intensities; the unmixing decisions themselves are unaffected. |
 
+### Relabelling without re-running the unmixing
+
+The unmixing is an hour of work per mouse; the labelling on top of it is about ten
+seconds. `--relabel-from` skips straight to the labels, reading the counts back from an
+existing `<mouse>_cellxgene.csv`:
+
+```bash
+# from a previous run's results still in the capsule
+python run_capsule.py --mouse-id 800792 --relabel-from /results
+
+# or from that run's registered asset, mounted under /data
+python run_capsule.py --mouse-id 800792 --relabel-from /data
+```
+
+`PATH` is the CSV or any directory above it — the asset mounts the file one level down,
+in a folder named for the asset, so the directory is searched recursively. If the mouse
+you asked for is not there, the error names the mice that are, since pointing at the
+wrong asset is the easy mistake.
+
+This writes `*_cellxgene_annotated.h5ad` and the four figures, and nothing else. **No
+`processing.json` and no asset manifest**: the counts came from a run whose provenance is
+already recorded, and a second processing record describing the same spot decisions would
+misrepresent what happened. Keep the original asset and note the commit the labels came
+from — the run header prints it.
+
+Use this whenever a label rule changes. Re-running the unmixing to see a new class
+threshold would take an hour to reproduce, bit for bit, counts you already have.
+
 Also: `--rounds R2 R3` to restrict rounds, `--processed-folder` to pin which processed
 asset supplies `acquisition.json` and the fg/bg join, and `--experimenter "Your Name"` to
 fill `processor_full_name` in the metadata.
