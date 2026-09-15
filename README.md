@@ -327,12 +327,21 @@ seconds. `--relabel-from` skips straight to the labels, reading the counts back 
 existing `<mouse>_cellxgene.csv`:
 
 ```bash
-# from a previous run's results still in the capsule
-python run_capsule.py --mouse-id 800792 --relabel-from /results
-
-# or from that run's registered asset, mounted under /data
+# attach HCR_<mouse>_unmixed-calibrated_<date>, then:
 python run_capsule.py --mouse-id 800792 --relabel-from /data
 ```
+
+**Use the registered asset, not `/results`.** `/results` is empty at the start of every
+run, and a Reproducible Run's outputs are captured to that run's own result set rather
+than left in the workstation — so a relabel run reading `/results` wipes the very files
+it was meant to read. The mouse's `unmixed-calibrated` asset is the durable copy. If the
+run you want was never registered, register it first with
+`python tools/register_result_asset.py --latest`, then attach it.
+
+Relabelling from an older unmixing generation is safe as long as the unmixing itself has
+not changed: the counts are an input here, and the same asset produces the same labels
+whenever you run it. Check the two runs' `cell x gene` line and per-channel spot change
+agree if you are unsure which generation an asset came from.
 
 `PATH` is the CSV or any directory above it — the asset mounts the file one level down,
 in a folder named for the asset, so the directory is searched recursively. If the mouse

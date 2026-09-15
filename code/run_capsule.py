@@ -172,10 +172,25 @@ def find_cellxgene(path, mouse_id):
     hits = sorted(p for p in path.rglob(wanted) if p.is_file())
     if not hits:
         others = sorted({p.name for p in path.rglob("*_cellxgene.csv")})
-        raise SystemExit(
-            f"--relabel-from: no {wanted} under {path}."
-            + (f" Found for other mice: {', '.join(others)}" if others else
-               " Nothing matching *_cellxgene.csv is there either."))
+        msg = f"--relabel-from: no {wanted} under {path}."
+        if others:
+            msg += f" Found for other mice: {', '.join(others)}"
+        else:
+            msg += " Nothing matching *_cellxgene.csv is there either."
+            # The usual cause. A Reproducible Run's outputs go to that run's result
+            # set, not into the workstation's /results, and every new run starts with
+            # /results empty -- so a relabel run wipes what it was meant to read.
+            if path.name == "results":
+                msg += (
+                    "\n\n/results is empty at the start of every run, and a "
+                    "Reproducible Run's outputs are captured to that run's result "
+                    "set rather than left here. Point at the mouse's registered "
+                    "unmixed-calibrated asset instead:"
+                    "\n  1. attach HCR_<mouse>_unmixed-calibrated_<date> to this capsule"
+                    "\n  2. python run_capsule.py --mouse-id <mouse> --relabel-from /data"
+                    "\nTo relabel a run that was never registered, register it first:"
+                    "\n  python tools/register_result_asset.py --latest")
+        raise SystemExit(msg)
     if len(hits) > 1:
         print(f"NOTE: {len(hits)} copies of {wanted} under {path}; using the newest.")
         hits.sort(key=lambda p: p.stat().st_mtime)
