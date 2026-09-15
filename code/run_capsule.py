@@ -78,14 +78,20 @@ DATA_DIR = Path("/root/capsule/data")
 OUTPUT_DIR = Path("/root/capsule/results")
 
 
-def find_asset(mouse_id, data_dir=DATA_DIR):
-    """The pairwise-unmixing asset directory for this mouse."""
+def find_asset(mouse_id, data_dir=DATA_DIR, required=True):
+    """The pairwise-unmixing asset directory for this mouse, or None when not required.
+
+    `required=False` is for --spots-from processed, where this asset is not an input:
+    its absence is then a fact to report, not a failure.
+    """
     hits = [p for p in data_dir.iterdir()
             if p.is_dir() and "pairwise-unmixing" in p.name and mouse_id in p.name]
     if not hits:
         hits = [p for p in data_dir.iterdir()
                 if p.is_dir() and any((p / f"{mouse_id}_{r}").exists()
                                       for r in ("R1", "R2", "R3"))]
+    if not hits and not required:
+        return None
     if not hits:
         # Name what IS attached and what is needed. The bare message this replaced
         # ("no pairwise-unmixing asset") does not say that the fix is to attach a data
@@ -117,6 +123,32 @@ def find_asset(mouse_id, data_dir=DATA_DIR):
     if len(hits) > 1:
         print(f"WARNING: {len(hits)} candidate assets, using {hits[0].name}")
     return hits[0]
+
+
+def discover_rounds_from_processed(data_dir, mouse_id):
+    """Rounds available from the PROCESSED assets alone, via processing_manifest.json.
+
+    Each processed asset declares its own round number, so the round set is readable
+    without the pairwise-unmixing asset. This is what makes `--spots-from processed` a
+    genuinely processed-only run rather than one that still needs the old mount to
+    enumerate its own work.
+    """
+    out = {}
+    for man in sorted(Path(data_dir).glob("*/processing_manifest.json")):
+        if mouse_id not in man.parent.name:
+            continue
+        spots = man.parent / "image_spot_spectral_unmixing"
+        try:
+            with open(man) as fh:
+                n = json.load(fh).get("round")
+        except (OSError, ValueError):
+            continue
+        if n is None:
+            continue
+        rk = f"R{int(n)}"
+        if (spots / f"mixed_spots_{rk}.pkl").exists():
+            out[rk] = man.parent.name
+    return sorted(out, key=lambda r: int(r[1:])), out
 
 
 def discover_rounds(asset_dir, mouse_id):
@@ -384,15 +416,33 @@ def main(argv=None):
         return relabel(args)
 
     data_dir = Path(args.data_dir)
-    asset = find_asset(args.mouse_id, data_dir)
-    rounds = args.rounds or discover_rounds(asset, args.mouse_id)
+    # With --spots-from processed the pairwise asset is not an input at all, so its
+    # absence must not be an error -- otherwise the flag still requires the mount it
+    # exists to remove. Rounds then come from the processed assets' own manifests.
+    if args.spots_from == "processed":
+        asset = find_asset(args.mouse_id, data_dir, required=False)
+        proc_rounds, proc_where = discover_rounds_from_processed(data_dir, args.mouse_id)
+        if not proc_rounds:
+            raise SystemExit(
+                f"--spots-from processed: no processed asset under {data_dir} carries "
+                f"image_spot_spectral_unmixing/mixed_spots_<R>.pkl for {args.mouse_id}.")
+        rounds = args.rounds or proc_rounds
+        print(f"spots   : processed assets ({len(proc_rounds)} rounds: "
+              f"{', '.join(proc_rounds)})")
+        if asset is None:
+            print("note    : no pairwise-unmixing asset attached; not needed for this run")
+    else:
+        asset = find_asset(args.mouse_id, data_dir)
+        rounds = args.rounds or discover_rounds(asset, args.mouse_id)
 
     # R1 carries Slc17a7, the only excitatory marker in the panel, and R4 carries
     # Gad2. Without both, build_anndata cannot assign a class and every cell comes
     # back "unassigned" with no clusters -- a silent loss if the user simply forgot
     # a round. Warn loudly rather than produce an unlabelled AnnData.
     if not args.no_anndata:
-        available = set(discover_rounds(asset, args.mouse_id))
+        available = set(discover_rounds_from_processed(data_dir, args.mouse_id)[0]
+                        if args.spots_from == "processed"
+                        else discover_rounds(asset, args.mouse_id))
         missing = [r for r in ("R1", "R4") if r not in rounds and r in available]
         if missing:
             print(f"WARNING: {' and '.join(missing)} available but not selected. "
@@ -405,7 +455,8 @@ def main(argv=None):
                   f"class labels need R1 (Slc17a7) and R4 (Gad2).")
     if not rounds:
         raise SystemExit(f"no rounds with mixed_spots_*.pkl under {asset}")
-    gene_maps = {r: gene_map_for_round(asset, args.mouse_id, r,
+    gene_maps = {r: gene_map_for_round(asset if asset is not None else data_dir,
+                                       args.mouse_id, r,
                                        processed_root=args.processed_root or data_dir)
                  for r in rounds}
     # Correct wrong gene symbols at the boundary where the map enters the run. Both
@@ -417,7 +468,7 @@ def main(argv=None):
 
     print(f"code    : {_code_provenance()}")
     print(f"mouse   : {args.mouse_id}")
-    print(f"asset   : {asset.name}")
+    print(f"asset   : {asset.name if asset is not None else '(none attached)'}")
     print(f"rounds  : {', '.join(rounds)}")
     for r in rounds:
         # Only channels this round actually imaged. R1 uses two of the five, and
@@ -433,7 +484,8 @@ def main(argv=None):
     else:
         found = [r for r in rounds
                  if pipeline.round_inputs_from_asset(
-                     asset, args.mouse_id, r, args.processed_root or str(data_dir),
+                     asset if asset is not None else data_dir,
+                     args.mouse_id, r, args.processed_root or str(data_dir),
                      processed_folder=args.processed_folder)[1]]
         if not found:
             fgbg_status = ("NOT AVAILABLE - no image_spot_detection/ under the processed "
@@ -448,7 +500,8 @@ def main(argv=None):
     print(f"spots   : {'NOT written (--no-spots)' if args.no_spots else 'written per round'}")
 
     res = pipeline.run_mouse(
-        asset, args.mouse_id, rounds, gene_maps,
+        asset if asset is not None else data_dir,
+        args.mouse_id, rounds, gene_maps,
         processed_root=args.processed_root or str(data_dir),
         processed_folder=args.processed_folder,
         output_dir=args.output_dir,

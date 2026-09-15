@@ -120,6 +120,30 @@ def candidate_processed_assets(processed_root, mouse_id):
     return sorted(hits, key=key, reverse=True)
 
 
+def processed_asset_for_round(processed_root, mouse_id, round_key):
+    """The processed asset that declares itself to be this round, or None.
+
+    `processing_manifest.json` carries `round`, so the mapping is read from the asset
+    rather than guessed from its timestamp. This matters because laser power is per
+    round: resolving by recency instead can hand an R2 run R6's acquisition.json, which
+    mis-scales every endmember with nothing in the output to show it.
+    """
+    import json as _json
+
+    want = int("".join(ch for ch in str(round_key) if ch.isdigit()))
+    for man in sorted(Path(processed_root).glob("*/processing_manifest.json")):
+        if mouse_id not in man.parent.name:
+            continue
+        try:
+            with open(man) as fh:
+                n = _json.load(fh).get("round")
+        except (OSError, ValueError):
+            continue
+        if n is not None and int(n) == want and (man.parent / "acquisition.json").exists():
+            return man.parent
+    return None
+
+
 def round_inputs_from_asset(asset_dir, mouse_id, round_key, processed_root=None,
                             processed_folder=None):
     """Locate this round's acquisition metadata and fg/bg stats files on disk.
@@ -157,9 +181,21 @@ def round_inputs_from_asset(asset_dir, mouse_id, round_key, processed_root=None,
             if cand.is_dir():
                 root = cand
         if root is None and processed_root:
+            # Ask each processed asset which round it IS. Exact, per round, and the
+            # only resolution available when there is no pairwise asset to read a
+            # dataset_folder out of.
+            root = processed_asset_for_round(processed_root, mouse_id, round_key)
+        if root is None and processed_root:
+            # Last resort: the newest asset for this mouse. WRONG ROUND IS POSSIBLE --
+            # laser power is per round, and taking R6's acquisition.json for an R2 run
+            # silently mis-scales every endmember. Announced so it is not invisible.
             cands = candidate_processed_assets(processed_root, mouse_id)
             if cands:
                 root = cands[0]
+                print(f"WARNING: {round_key}: no processed asset declares this round; "
+                      f"falling back to the newest one ({root.name}). Its laser power "
+                      f"may belong to a different round -- pass --processed-folder to "
+                      f"force the right asset.", flush=True)
 
     if root is None:
         return None, None
@@ -311,6 +347,9 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
                   summary=pd.DataFrame(summary))
     if output_dir:
         outp = Path(output_dir)
+        # /results always exists in Code Ocean so this never fired there, but a nested
+        # --output-dir on any other host loses the entire run at the final write.
+        outp.mkdir(parents=True, exist_ok=True)
         print("  writing tables...", flush=True)
         table.to_csv(outp / f"{mouse_id}_cellxgene.csv")
         result["separability"].to_csv(outp / f"{mouse_id}_separability.csv", index=False)
