@@ -239,6 +239,10 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
     cxg_all = pd.concat(cxgs, ignore_index=True)
     table = cxg_all.pivot_table(index="cell_id", columns="round_chan_gene",
                                 values="spot_count", aggfunc="sum", fill_value=0)
+    # Correct wrong gene names once, here, so the CSV header, the .h5ad var and the
+    # figure axes all carry the corrected symbol. Announced, never silent.
+    from .annotate import rename_gene_aliases
+    table, _renamed = rename_gene_aliases(table)
     print(f"  cell x gene: {table.shape[0]:,} cells x {table.shape[1]} genes "
           f"({_time.time() - _t_post:.0f}s)", flush=True)
     result = dict(cellxgene=table,

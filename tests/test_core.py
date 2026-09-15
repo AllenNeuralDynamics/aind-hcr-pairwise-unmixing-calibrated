@@ -705,6 +705,108 @@ def test_the_per_mouse_caveat_travels_with_the_file():
     assert "consensus" in note.lower()
 
 
+def test_sncg_promotion_needs_cck_to_lead_every_gene():
+    """Sncg is high Cck with NO other subclass marker.
+
+    Ranking Cck against only the non-marker genes hides the evidence that
+    disqualifies a cluster: on 800792 a 627-cell cluster with Sst 0.787 against Cck
+    0.551 was promoted because Sst had been dropped before the comparison.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import labeling as L
+
+    means = pd.DataFrame(
+        {"Cck":   [0.551, 1.371, 0.615],
+         "Sst":   [0.787, 0.152, 0.567],   # row 0: Sst beats Cck -> must stay Sst
+         "Reln":  [0.214, 0.376, 1.059],   # row 2: Reln beats Cck -> must stay Sst
+         "Lamp5": [0.139, 0.294, 0.174],
+         "Pvalb": [0.024, 0.029, 0.009]},
+        index=[0, 1, 2])
+    labels = np.array([0] * 10 + [1] * 10 + [2] * 10)
+    subclass = np.array(["Sst"] * 10 + ["unassigned"] * 10 + ["Sst"] * 10)
+
+    blocks, diag = L.hcr_cluster_blocks(means, subclass, labels)
+    assert blocks[1] == "Sncg", "the genuine Cck-topped cluster must be promoted"
+    assert blocks[0] != "Sncg", "an Sst-dominant cluster must not be promoted"
+    assert blocks[2] != "Sncg", "a Reln-dominant cluster must not be promoted"
+    assert diag.loc[0, "sncg_top_gene"] == "Sst"
+    assert bool(diag.loc[1, "sncg_promoted"]) is True
+
+
+def test_cluster_names_exclude_every_subclass_marker():
+    """`Sncg-1 (Sst/Cck)` asserts a contradiction -- an Sncg cluster whose strongest
+    gene belongs to another subclass. The block prefix already carries the subclass."""
+    from aind_hcr_pairwise_unmixing_calibrated import labeling as L
+
+    means = pd.DataFrame(
+        {"Cck": [1.4], "Sst": [1.9], "Reln": [0.8], "Pvalb": [0.1], "Vip": [0.9]},
+        index=[0])
+    names, _ = L.hcr_cluster_names(means, {0: "Sncg"})
+    assert not any(m in names[0] for m in L.HCR_SUBCLASS_MARKERS), names[0]
+    assert "Cck" in names[0] and "Reln" in names[0]
+
+
+def test_cluster_with_no_nonmarker_gene_gets_a_bare_name():
+    """Excluding the markers can empty the gene list. A bare `Vip-2` is correct;
+    inventing a gene below the floor is not."""
+    from aind_hcr_pairwise_unmixing_calibrated import labeling as L
+
+    means = pd.DataFrame({"Vip": [2.7], "Cck": [0.045], "Reln": [0.026]}, index=[0])
+    names, _ = L.hcr_cluster_names(means, {0: "Vip"})
+    assert names[0] == "Vip-1"
+
+
+def test_tac_is_corrected_to_tac1_and_announced(capsys):
+    """`Tac` is not a gene symbol. Left alone it fails to match HCR_PANEL_15 and the
+    inhibitory clustering silently runs on fourteen genes."""
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = pd.DataFrame({"R2-638-Tac": [1, 2], "R5-561-Cck": [3, 4]}, index=["a", "b"])
+    out, renames = A.rename_gene_aliases(t)
+    printed = capsys.readouterr().out
+    assert list(out.columns) == ["R2-638-Tac1", "R5-561-Cck"]
+    assert renames == [("R2-638-Tac", "R2-638-Tac1")]
+    assert "WARNING" in printed and "Tac1" in printed
+
+    again, renames2 = A.rename_gene_aliases(out)
+    assert renames2 == [] and list(again.columns) == list(out.columns)
+
+
+def test_gene_name_does_not_rename_silently():
+    """One mechanism, and it is loud. A resolver that quietly maps Tac to Tac1 leaves
+    two names for one gene circulating with nothing in the log."""
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    assert A.gene_name("R2-638-Tac") == "Tac"
+
+
+def test_panel_15_matches_after_the_correction():
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+    from aind_hcr_pairwise_unmixing_calibrated import labeling as L
+
+    cols = [f"R1-561-{g}" for g in L.HCR_PANEL_15 if g != "Tac1"] + ["R2-638-Tac"]
+    t = pd.DataFrame(np.ones((3, len(cols))), columns=cols)
+    fixed, _ = A.rename_gene_aliases(t, warn=False)
+    assert set(L.HCR_PANEL_15) <= {A.gene_name(c) for c in fixed.columns}
+
+
+def test_display_layer_is_transformed_within_class():
+    """The figures show `normalized_within_class`; names come from a transform on the
+    class's own cells. Computed over every cell at once the two disagree by ~4x, so a
+    gene named in a cluster can be invisible in the panel beside it."""
+    pytest.importorskip("anndata")
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    adata = A.build_anndata(_fake_table(), n_inh=4, n_exc=3)
+    assert "normalized_within_class" in adata.layers
+    inh = (adata.obs["class"] == "inhibitory").to_numpy()
+    W = np.asarray(adata.layers["normalized_within_class"])
+    # every inhibitory row is scaled among inhibitory cells, so their totals share one
+    # value -- the class median -- rather than the whole table's
+    tot = W[inh].sum(1)
+    assert np.allclose(tot, np.median(tot), rtol=0.02)
+    assert np.allclose(W[~inh & (adata.obs["class"] == "low_counts").to_numpy()].sum(1), 0)
+
+
 def test_gene_map_reads_real_ds_config_shape(tmp_path):
     """GENE_DICT, uppercase and nested under the round number.
 

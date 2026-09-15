@@ -139,12 +139,24 @@ def hcr_cluster_blocks(cluster_means, per_cell_subclass, labels,
     concentration while the same share of a common one is none. A cluster whose
     plurality call is `unassigned` is `Other` -- `unassigned` is not a block.
 
-    Then the Sncg promotion: a cluster whose top non-marker gene is Cck, above
-    `name_floor` and leading the runner-up by `dominance`, becomes Sncg regardless of
-    an enriched assignment. The dominance clause is load-bearing -- without it a
-    Pvalb/Mme cluster is promoted on a 0.027 tie. This rule is post-hoc; it was
-    written after inspecting which clusters it needed to catch, and should be
-    reported as such.
+    Then the Sncg promotion. Sncg is defined by high Cck with NO other subclass
+    marker, so Cck must be the highest gene in the cluster profile outright --
+    subclass markers included -- above `name_floor` and leading the runner-up by
+    `dominance`.
+
+    Ranking Cck against only the non-marker genes, as the cohort's
+    `hcr_sncg_block` does, is wrong here: dropping Pvalb/Sst/Vip/Lamp5 before
+    ranking hides exactly the evidence that disqualifies a cluster. On 800792 that
+    promoted a 627-cell cluster whose Sst mean was 0.787 against Cck's 0.551 (raw
+    medians 444 and 102 counts) -- an Sst cluster relabelled Sncg because Sst had
+    been removed from the comparison. Requiring Cck to lead everything leaves that
+    cluster in Sst and still promotes the genuine Cck cluster (Cck 1.371, Sst
+    0.152). The cohort run was not bitten by this because its k = 18 over six mice
+    produced no such cluster; the rule was always weaker than its intent.
+
+    The dominance clause is load-bearing -- without it a Pvalb/Mme cluster is
+    promoted on a 0.027 tie. This rule is post-hoc; it was written after inspecting
+    which clusters it needed to catch, and should be reported as such.
 
     Returns (blocks dict, per-cluster diagnostics DataFrame).
     """
@@ -165,30 +177,47 @@ def hcr_cluster_blocks(cluster_means, per_cell_subclass, labels,
                          enrichment=enrich, block_before_sncg=block, n=int(m.sum())))
         blocks[c] = block
 
-    # Sncg promotion, applied after every block is set so it can override one.
+    # Sncg promotion, applied after every block is set so it can override one. The
+    # full profile is ranked -- subclass markers are NOT dropped, so a cluster with a
+    # stronger Sst/Pvalb/Vip/Lamp5 signal than Cck cannot be promoted.
+    sncg_diag = {}
     for c in cluster_means.index:
-        profile = cluster_means.loc[c].drop(labels=markers, errors="ignore")
+        profile = cluster_means.loc[c]
         if len(profile) < 2 or sncg_gene not in profile.index:
             continue
         ranked = profile.sort_values(ascending=False)
-        top, runner = ranked.index[0], float(ranked.iloc[1])
-        if (top == sncg_gene and float(ranked.iloc[0]) > name_floor
-                and float(ranked.iloc[0]) >= dominance * max(runner, 1e-9)):
+        top, lead, runner = ranked.index[0], float(ranked.iloc[0]), float(ranked.iloc[1])
+        promote = (top == sncg_gene and lead > name_floor
+                   and lead >= dominance * max(runner, 1e-9))
+        sncg_diag[c] = dict(top_gene=top, top_value=lead,
+                            runner_up=ranked.index[1], runner_up_value=runner,
+                            sncg_value=float(profile[sncg_gene]), promoted=promote)
+        if promote:
             blocks[c] = sncg_block
 
     diag = pd.DataFrame(rows).set_index("cluster")
     diag["block"] = [blocks[c] for c in diag.index]
+    for col, key in [("sncg_top_gene", "top_gene"), ("sncg_top_value", "top_value"),
+                     ("sncg_cck_value", "sncg_value"), ("sncg_promoted", "promoted")]:
+        diag[col] = [sncg_diag.get(c, {}).get(key) for c in diag.index]
     return blocks, diag
 
 
 def hcr_cluster_names(cluster_means, blocks, name_floor=HCR_NAME_FLOOR,
-                      n_markers=3, order_by=None):
+                      n_markers=3, order_by=None, markers=None):
     """Name clusters `<Block>-<n> (GeneA/GeneB/GeneC)`.
 
-    Genes are those whose cluster mean exceeds `name_floor` in transform units,
-    excluding the block's own marker. The ABSOLUTE level, not the deviation across
-    clusters: a gene can deviate strongly and still be low everywhere, which produces
-    a name that reads as a marker for something the cluster barely expresses.
+    Genes are those whose cluster mean exceeds `name_floor` in transform units. The
+    ABSOLUTE level, not the deviation across clusters: a gene can deviate strongly
+    and still be low everywhere, which produces a name that reads as a marker for
+    something the cluster barely expresses.
+
+    ALL FOUR subclass markers are excluded from the gene list, not just the block's
+    own. The block prefix already carries the subclass, and naming a cluster after a
+    different subclass's marker asserts a contradiction: `Sncg-1 (Sst/Cck)` reads as
+    an Sncg cluster whose strongest gene belongs to another subclass. Where that
+    happens the block call is what needs fixing, and a name that hides it is worse
+    than one that omits a gene.
 
     Numbering runs within a block. `order_by` is an optional Series over the cluster
     index giving the within-block sort key (the cohort run uses median depth; this
@@ -196,6 +225,8 @@ def hcr_cluster_names(cluster_means, blocks, name_floor=HCR_NAME_FLOOR,
 
     Returns (names dict cluster -> label, ordered list of cluster ids).
     """
+    if markers is None:
+        markers = list(HCR_SUBCLASS_MARKERS)
     by_block = {}
     for c in cluster_means.index:
         by_block.setdefault(blocks[c], []).append(c)
@@ -206,7 +237,7 @@ def hcr_cluster_names(cluster_means, blocks, name_floor=HCR_NAME_FLOOR,
         if order_by is not None:
             members = sorted(members, key=lambda c: order_by[c])
         for i, c in enumerate(members, start=1):
-            profile = cluster_means.loc[c].drop(labels=[block], errors="ignore")
+            profile = cluster_means.loc[c].drop(labels=markers, errors="ignore")
             top = [g for g, v in profile.sort_values(ascending=False).items()
                    if v > name_floor][:n_markers]
             names[c] = f"{block}-{i}" + (f" ({'/'.join(map(str, top))})" if top else "")

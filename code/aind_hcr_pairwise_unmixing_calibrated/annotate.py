@@ -100,17 +100,51 @@ def parse_columns(columns):
     return pd.DataFrame(rows).set_index("column")
 
 
-#: Panel column names that differ from the protocol's gene symbol. The probe for Tac1
-#: is labelled `Tac` in the HCR panel; without the alias it fails to match HCR_PANEL_15
-#: and the inhibitory clustering silently runs on fourteen genes instead of fifteen.
-#: The cohort capsule applies the same rename when it loads a table.
+#: Panel gene names that are WRONG and are corrected on load. `Tac` is the HCR panel's
+#: label for the Tac1 probe; it is not a gene symbol, and left alone it fails to match
+#: HCR_PANEL_15, so the inhibitory clustering silently runs on fourteen genes instead of
+#: fifteen. Every correction is announced -- see `rename_gene_aliases`. A silent rename
+#: would leave two names for one gene circulating in downstream analyses with nothing in
+#: the log to explain which is which.
 GENE_ALIASES = {"Tac": "Tac1"}
 
 
 def gene_name(column):
-    """'R5-561-Cck' -> 'Cck', with the panel's aliases resolved to protocol symbols."""
-    raw = str(column).split("-")[-1]
-    return GENE_ALIASES.get(raw, raw)
+    """'R5-561-Cck' -> 'Cck'.
+
+    No alias resolution here: corrections happen once, loudly, in
+    `rename_gene_aliases`, so this stays a pure parse of whatever the column says.
+    """
+    return str(column).split("-")[-1]
+
+
+def rename_gene_aliases(table, aliases=None, warn=True):
+    """Correct wrong gene names in the column labels. Returns (table, renames).
+
+    Renames the gene field of `<round>-<channel>-<gene>` columns, so the correction
+    reaches everything downstream of the cell x gene table -- the CSV header, the
+    AnnData `var`, the figure axes -- rather than only the lookups that happen to go
+    through a resolver.
+
+    Idempotent: a table whose names are already correct is returned unchanged with an
+    empty rename list.
+    """
+    aliases = dict(GENE_ALIASES if aliases is None else aliases)
+    renames = {}
+    for col in table.columns:
+        parts = str(col).split("-")
+        if parts[-1] in aliases:
+            parts[-1] = aliases[parts[-1]]
+            renames[col] = "-".join(parts)
+    if not renames:
+        return table, []
+    if warn:
+        for old, new in renames.items():
+            print(f"WARNING: gene name '{str(old).split('-')[-1]}' is not a valid symbol"
+                  f" and was corrected to '{str(new).split('-')[-1]}'"
+                  f" ({old} -> {new}). Downstream outputs use the corrected name.",
+                  flush=True)
+    return table.rename(columns=renames), [(o, n) for o, n in renames.items()]
 
 
 def gene_column(table, gene):
@@ -329,10 +363,43 @@ def cluster_by_class(table, classes, subclass, n_inh=N_CLUSTERS_INH,
             enrichment={str(int(c)): round(float(diag.loc[c, "enrichment"]), 3)
                         for c in means.index} if "enrichment" in diag else {},
             purity={str(int(c)): round(float(diag.loc[c, "purity"]), 3)
-                    for c in means.index} if "purity" in diag else {})
+                    for c in means.index} if "purity" in diag else {},
+            # The Sncg decision per cluster, so a promotion (or a near miss) can be
+            # audited from the file without re-deriving the cluster means.
+            sncg={str(int(c)): dict(
+                      top_gene=str(diag.loc[c, "sncg_top_gene"]),
+                      top_value=round(float(diag.loc[c, "sncg_top_value"]), 3),
+                      cck_value=round(float(diag.loc[c, "sncg_cck_value"]), 3),
+                      promoted=bool(diag.loc[c, "sncg_promoted"]))
+                  for c in means.index
+                  if "sncg_top_gene" in diag and pd.notna(diag.loc[c, "sncg_top_gene"])}
+                 if "sncg_top_gene" in diag else {})
         offset += k
 
     return labels, cluster_id, cluster_matrix, info
+
+
+def within_class_transform(table, classes):
+    """The p95 transform computed within each class, over ALL panel genes.
+
+    This is the matrix the cluster figures display. `layers["normalized"]` is
+    transformed over every cell at once, which puts the labels and the picture on
+    different scales: a gene's 95th percentile and the per-cell totals are then both
+    set by the excitatory majority, and on 800792 that renders inhibitory Cck at 0.13
+    where the naming matrix has 0.62 -- invisible in the figure while appearing in the
+    cluster name. Transformed within the class, the display agrees with the naming
+    matrix to about one percent (Cck 0.557 against 0.551 on the promoted cluster), so
+    a name above the 0.5 floor is a mark you can see.
+
+    Cells in neither class stay zero -- there is no class to normalise them within.
+    """
+    out = pd.DataFrame(0.0, index=table.index, columns=table.columns)
+    classes = classes.reindex(table.index)
+    for klass in ("inhibitory", "excitatory"):
+        sel = table.index[classes.to_numpy() == klass]
+        if len(sel):
+            out.loc[sel] = hcr_transform_p95(table.loc[sel].to_numpy(float))
+    return out
 
 
 def round_channel_order(columns):
@@ -356,6 +423,8 @@ def build_anndata(table, min_class_counts=MIN_CLASS_COUNTS, n_inh=N_CLUSTERS_INH
     import anndata as ad
 
     table = table.sort_index()
+    # Idempotent: a no-op when the pipeline already corrected the names upstream.
+    table, renames = rename_gene_aliases(table)
     normalized, norm_info = normalize_cellxgene(table)
 
     classes, class_info, posterior = assign_class(table, min_class_counts, seed=seed)
@@ -384,8 +453,11 @@ def build_anndata(table, min_class_counts=MIN_CLASS_COUNTS, n_inh=N_CLUSTERS_INH
 
     adata = ad.AnnData(X=table.to_numpy().astype(np.float32), obs=obs, var=var)
     adata.layers["normalized"] = normalized.to_numpy().astype(np.float32)
+    adata.layers["normalized_within_class"] = (
+        within_class_transform(table, classes).to_numpy().astype(np.float32))
     adata.obsm["X_cluster"] = cluster_matrix.to_numpy().astype(np.float32)
     adata.uns["unmixing"] = dict(
+        gene_name_corrections=[list(r) for r in renames],
         normalization=norm_info,
         classification=class_info,
         subclass=subclass_info,
@@ -394,10 +466,12 @@ def build_anndata(table, min_class_counts=MIN_CLASS_COUNTS, n_inh=N_CLUSTERS_INH
                         name_floor=HCR_NAME_FLOOR,
                         panel_15=list(HCR_PANEL_15), **clust_info),
         note=("X is raw transcript counts; layers['normalized'] is the p95 transform "
-              "over all genes; obsm['X_cluster'] is what k-means actually saw, "
-              "zero-padded outside each class's clustering genes. Clusters are PER "
-              "MOUSE and do not correspond across animals -- use the consensus "
-              "clusters for any across-mouse analysis."),
+              "over every cell at once; layers['normalized_within_class'] is the same "
+              "transform computed within each class and is what the cluster figures "
+              "display and what cluster names are comparable to; obsm['X_cluster'] is "
+              "what k-means actually saw, zero-padded outside each class's clustering "
+              "genes. Clusters are PER MOUSE and do not correspond across animals -- "
+              "use the consensus clusters for any across-mouse analysis."),
     )
     if extra_uns:
         adata.uns["unmixing"].update(extra_uns)

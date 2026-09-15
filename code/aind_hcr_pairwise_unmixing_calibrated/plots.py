@@ -140,11 +140,11 @@ def _block_labels(ax, blocks, n_rows):
 
 
 def _panel(a, ax, columns, display, full_labels, clusters, blocks, boundaries,
-           cluster_labels):
+           cluster_labels, layer="normalized"):
     from matplotlib.patches import Rectangle
 
     n = a.n_obs
-    matrix = a[:, columns].layers["normalized"] if display == "normalized" else a[:, columns].X
+    matrix = a[:, columns].layers[layer] if display == "normalized" else a[:, columns].X
     matrix = matrix.toarray() if hasattr(matrix, "toarray") else np.asarray(matrix)
     # 1.5 for the transform, matching the cohort figures: the p95 stage caps a typical
     # gene near 1 but the per-cell rescaling pushes the brightest cells above it, and
@@ -207,10 +207,22 @@ def write_plots(adata, output_dir, mouse_id, rounds):
             fig, axes = plt.subplots(1, 2, figsize=figsize)
             fig.subplots_adjust(left=0.105, right=0.815, top=0.855, bottom=0.185,
                                 wspace=0.72)
+            # Within-class transform on the single-class figure: the labels were
+            # derived from a transform computed on that class's cells, and the
+            # all-cell transform shows a visibly different matrix -- a gene named in
+            # a cluster would be invisible in the panel beside it.
+            layer = ("normalized_within_class"
+                     if cell_class is not None
+                     and "normalized_within_class" in adata.layers else "normalized")
             for j, display in enumerate(["raw", "normalized"]):
                 image, n = _panel(a, axes[j], columns, display, suffix == "rc",
-                                  clusters, blocks, boundaries, show_clusters)
-                axes[j].set_title(f"{display} \u00b7 {n:,} cells", loc="left", fontsize=8)
+                                  clusters, blocks, boundaries, show_clusters,
+                                  layer=layer)
+                title = (f"{display} \u00b7 {n:,} cells" if display == "raw" else
+                         f"{display} within class \u00b7 {n:,} cells"
+                         if layer == "normalized_within_class"
+                         else f"{display} \u00b7 {n:,} cells")
+                axes[j].set_title(title, loc="left", fontsize=8)
                 if j == 0:
                     axes[j].set_ylabel("Cells, grouped by cluster", fontsize=7.5)
                 bar = fig.colorbar(image, ax=axes[j], orientation="horizontal",

@@ -372,13 +372,32 @@ unchanged; what changed is how the annotated `.h5ad` is labelled.
 | transform | per-cell mean, then per-gene 95th percentile clipped to 1 | per-gene 95th percentile, then per-cell total rescaled to the median total |
 | clustering | k = 20 inhibitory / k = 12 excitatory on the whole panel | k = 18 inhibitory on the protocol's fifteen genes / k = 12 excitatory on the rest |
 | cluster blocks | inherited from the per-cluster subclass call | plurality of the per-cell calls at 1.5× enrichment, else `Other`, plus the *Cck*-dominance promotion to `Sncg` |
-| cluster names | top three *enriched* genes, with barred gene lists | up to three genes above 0.5 in transform units, absolute level |
+| cluster names | top three *enriched* genes, with barred gene lists | up to three genes above 0.5 in transform units, absolute level, all four subclass markers excluded |
+| gene names | `Tac` passed through as-is | corrected to `Tac1` on load, with a warning in the run log |
 | new in `obs` | — | `p_inhibitory`, the mixture posterior the class call was cut from |
 | new in `obsm` | — | `X_cluster`, the matrix k-means actually saw |
+| new in `layers` | — | `normalized_within_class`, the transform the figures show |
 
 The rules come from `matchings/hcr-inhibitory-consensus-capsule` (`code/PROTOCOL.md`)
 and are vendored in `labeling.py`, with the published constants copied rather than
 re-derived.
+
+**Three corrections since, found on 800792.** The `Sncg` promotion ranked *Cck* against
+only the non-marker genes and so relabelled an *Sst* cluster (*Sst* 0.787, *Cck* 0.551);
+*Cck* must now lead every gene outright. Cluster names excluded only the block's own
+marker, which produced `Sncg-1 (Sst/Cck)`; all four markers are now excluded. And the
+figures displayed the all-cell transform while names came from the per-class one, so a
+named gene could be invisible in the panel beside it — the single-class figures now show
+`normalized_within_class`. The first of these is a deliberate divergence from the cohort
+protocol's `hcr_sncg_block`, which has the weaker test; the cohort's k = 18 over six mice
+produced no cluster that exposed it.
+
+**`Tac` is not a gene symbol** and is corrected to `Tac1` when the cell × gene table is
+built, with a `WARNING` line naming the substitution in the run log. Uncorrected it
+fails to match the protocol's fifteen clustering genes, and the inhibitory clustering
+silently runs on fourteen. The correction is applied to the column labels themselves, so
+the CSV header, the `.h5ad` `var` and the figure axes all carry `Tac1`;
+`uns["unmixing"]["gene_name_corrections"]` records what was changed.
 
 **No new inputs.** What was taken from the cohort work is source code and constants, not
 data: `labeling.py` reads no files, and the capsule's mounts are unchanged — it still
@@ -540,6 +559,20 @@ depend on the cell composition of the table, so the same cell transforms differe
 single-mouse run and a cohort run. Genes first, cells second is what the consensus
 protocol uses, and it is why these values can be compared against the cohort figures.
 
+**`adata.layers["normalized_within_class"]`** — the same transform computed **within
+each class**, over all 27 genes. This is what the single-class figures display, and the
+matrix cluster names are comparable to.
+
+It exists because `layers["normalized"]` is transformed over every cell at once, which
+puts the labels and the picture on different scales: both a gene's 95th percentile and
+the per-cell totals are then set by the excitatory majority. On 800792 that renders
+inhibitory *Cck* at 0.13 where the naming matrix has 0.62 — invisible in the figure
+while appearing in the cluster name, which is exactly the report that found it.
+Transformed within the class, the display agrees with the naming matrix to about one
+percent (*Cck* 0.557 against 0.551 on the promoted cluster), so a gene above the 0.5
+naming floor is a mark you can actually see. Cells in neither class are zero — there is
+no class to normalise them within.
+
 **`adata.obsm["X_cluster"]`** — the matrix k-means actually saw. The transform is
 recomputed on each class's own cells and its own gene space, so this is not a slice of
 `layers["normalized"]`; genes outside a cell's clustering space are zero-padded. k-means
@@ -556,7 +589,7 @@ handful of cells the same weight as one carrying real structure.
 |---|---|
 | `class` | `inhibitory` / `excitatory` / `ambiguous` / `low_counts` — plus `unassigned` in the one degenerate case below, where a marker's round is absent and no call is possible at all. From a two-component Gaussian mixture on log2((Gad2+1)/(Slc17a7+1)) cut at posterior 0.90 and 0.10. Cells below 100 total counts are `low_counts` and take no part in the fit. A mixture rather than fixed per-marker thresholds: the boundary is set by the data's own two modes, so it tracks a mouse's detection depth instead of being calibrated on one animal and carried to the rest. Cells between the gates are `ambiguous` — around 1% in the cohort, and not a thresholding artefact: the fraction barely moves when the mixture is refitted per mouse and does not fall with library size |
 | `subclass` | `Pvalb` / `Sst` / `Vip` / `Lamp5` / `unassigned` / `none`, a **per-cell** call: whichever of the four markers carries the most **raw counts**, with a winner below 20 counts returning `unassigned`. On raw counts, not the transform — the p95 stage makes Lamp5 render about 3× darker than Sst at equal counts and moves the call. `none` on cells the class call did not place in the inhibitory class |
-| `cluster` | readable name, e.g. `Pvalb-2 (Mme/Cck)` — subclass block, index within block, then up to three genes whose cluster mean exceeds 0.5 in transform units. The **absolute** level, not deviation across clusters: a gene can deviate strongly and still be low everywhere, producing a name that reads as a marker for something the cluster barely expresses |
+| `cluster` | readable name, e.g. `Pvalb-2 (Mme/Cck)` — subclass block, index within block, then up to three genes whose cluster mean exceeds 0.5 in transform units. The **absolute** level, not deviation across clusters: a gene can deviate strongly and still be low everywhere, producing a name that reads as a marker for something the cluster barely expresses. **All four subclass markers are excluded** from the gene list, not just the block's own: the prefix already carries the subclass, and a name like `Sncg-1 (Sst/Cck)` asserts a contradiction — where that happens the block call is what needs fixing, and a name that hides it is worse than one that omits a gene. A cluster with no non-marker gene above the floor gets a bare `Vip-2` rather than an invented marker |
 | `cluster_id` | integer label; `-1` for cells that were not clustered (`ambiguous`, `low_counts`, or an all-zero profile) |
 | `p_inhibitory` | the mixture posterior the class call was cut from, so a borderline cell is visible rather than just labelled |
 | `total_counts`, `n_genes` | per-cell depth and the number of genes detected |
@@ -566,9 +599,20 @@ A cluster's block and a cell's own `subclass` are allowed to disagree. A cluster
 its block from the plurality of its cells' calls, required to be 1.5× that subclass's
 share of the background composition — enrichment rather than raw purity, because a
 modest share of a rare subclass is strong concentration while the same share of a common
-one is none. Clusters below the floor become `Other`. One post-hoc rule sits on top: a
-cluster whose top non-marker gene is *Cck*, above the 0.5 naming threshold and leading
-the runner-up by 1.5×, is promoted to `Sncg`, which the four markers cannot express.
+one is none. Clusters below the floor become `Other`.
+
+One post-hoc rule sits on top. *Sncg* is defined by **high *Cck* with no other subclass
+marker**, and it is the one subclass the four markers cannot express, so a cluster whose
+**highest gene outright** is *Cck* — above the 0.5 naming threshold and leading the
+runner-up by 1.5× — is promoted to `Sncg`. Highest outright, with *Pvalb*/*Sst*/*Vip*/
+*Lamp5* left in the comparison: ranking *Cck* against only the non-marker genes, as the
+cohort's `hcr_sncg_block` does, drops exactly the evidence that disqualifies a cluster.
+On 800792 that promoted a 627-cell cluster whose *Sst* mean was 0.787 against *Cck*'s
+0.551 — raw medians 444 and 102 counts, an *Sst* cluster relabelled `Sncg` because *Sst*
+had been removed from the comparison. The stricter test leaves it in `Sst` and still
+promotes the genuine *Cck* cluster (*Cck* 1.371, *Sst* 0.152). `uns` records the top
+gene, its value and the promotion decision per cluster, so a promotion or a near miss
+can be audited from the file.
 
 **`adata.uns["unmixing"]`** — a nested record of how the labels were made:
 `classification` (markers available, count floor, posterior gates, the fitted log-ratio
@@ -919,6 +963,7 @@ Alongside the spot tables, the capsule writes `<mouse>_cellxgene_annotated.h5ad`
 |---|---|
 | `X` | **raw** transcript counts, all cells × all genes |
 | `layers["normalized"]` | the p95 transform over all cells and genes: each gene ÷ its 95th percentile, then each cell ÷ its own total × the median total |
+| `layers["normalized_within_class"]` | the same transform computed within each class — what the single-class figures show, and what cluster names are comparable to |
 | `obsm["X_cluster"]` | the matrix k-means actually saw, transformed per class on that class's own cells and genes, zero-padded elsewhere |
 | `obs` | `class`, `subclass`, `cluster`, `cluster_id`, `p_inhibitory`, marker counts, `total_counts`, `n_genes` |
 | `var` | `round`, `channel`, `gene` per column |
