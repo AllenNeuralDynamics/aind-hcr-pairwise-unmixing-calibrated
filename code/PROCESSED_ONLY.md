@@ -64,13 +64,62 @@ Tested on synthetic tables of both schemas, including the controlled comparison:
 **same** spot set through both paths gives an identical cell × gene table, with fg/bg
 present on the processed side and absent on the pairwise side. 85 tests pass.
 
+## Where the missing 2–4% of spots went: ROI filtering
+
+Resolved from `hcr-pairwise-spot-unmixing`'s own `code/DATA_FLOW.md`. Its per-round order
+is:
+
+```
+Load cells from mixed CxG
+  → ROI filtering   volume · soma classifier · edge · tile overlap
+  → Load spots      FILTERED TO KEPT CELLS
+  → ... → Save mixed_spots_RN.pkl
+```
+
+**Spots are only ever loaded for cells that survived ROI filtering.** So the pairwise
+table is not a filtered copy of the processed one — it was built from a smaller cell set
+to begin with, and the 2–4% gap is spots in ROI-rejected cells. It removes **cells**, not
+just spots, so switching input can add rows to the cell × gene table and not only counts
+within existing rows.
+
+The other candidate, `filter_by_threshold` in `aind-spot-spectral-unmixing`, is **not**
+it. That function drops nothing:
+
+```python
+spots_df['over_thresh'] = False
+spots_df.loc[spots_df['spot_id'].isin(spots_over_thresh), 'over_thresh'] = True
+return spots_df, spots_over_thresh
+```
+
+It annotates and returns the full frame — the same annotate-don't-delete pattern this
+capsule uses, and a fourth channel-independent column the processed table carries.
+
+### Should this capsule implement either filter? No — and that is the argument for switching
+
+`filter_by_threshold` is an annotation, so there is nothing to implement.
+
+ROI filtering is a real decision, and the case for leaving it out is that **this capsule
+has been applying someone else's ROI rule invisibly.** The pairwise step's rule is volume
++ soma classifier + edge + tile overlap. The consensus protocol's rule is the
+segmentation classifier's own argmax with coregistered-never-dropped and no-signature
+rescues. Those are different rules, and the second is applied downstream by the cohort
+run, which is where the ROI-shape-metrics asset is consumed.
+
+So reading the processed table does not *add* an unfiltered input — it *removes* a hidden
+filter, and leaves the ROI decision in one place, downstream, under a documented rule.
+That is the same reasoning that keeps geometric QC annotated rather than applied here,
+and it is consistent with keeping ROI quality metrics out of this capsule.
+
+What it costs: the per-mouse `.h5ad` will carry cells the ROI classifier would reject,
+and class / subclass / cluster labels are computed on that slightly wider population. The
+cohort run drops them at its own ROI stage. Whether the wider population moves any
+per-cell label materially is measurable — item 1 below.
+
 ## What is NOT settled, and must be checked on real data
 
-1. **The processed table holds 2–4% more spots** (R1 58,616,632 vs 56,306,976; R2–R6
-   ~98%). This is the whole reason the switch is not a drop-in: more input spots means a
-   different cell × gene table. Which spot set is *correct* is a question about the
-   upstream filter — `process_round.py` writes `mixed_spots` before its own threshold
-   filter, and `filter_by_threshold` runs after — not a question about this code.
+1. **How much does the cell × gene table move** — cells as well as counts — once the
+   ROI-rejected cells are included. Compare against the registered `unmixed-calibrated`
+   asset for the same mouse. The mechanism is now known; the magnitude is not.
 2. **Do the native fg/bg agree with what the join reconstructs?** The join was validated
    to r = 1.000000 against the pipeline's own subtracted value on 800995 R5. Run one
    round both ways and compare `fg` and `bg` per spot. If they disagree, the join's
@@ -78,8 +127,13 @@ present on the processed side and absent on the pairwise side. 85 tests pass.
    results already produced.
 3. **How much does the cell × gene table move**, on the same mouse, with the extra
    spots included. Compare against the registered `unmixed-calibrated` asset.
-4. **`valid_spot`** — `hcr-pairwise-spot-unmixing` filters on it when present. Check
-   whether the processed table carries it and whether it accounts for the row gap.
+4. **`valid_spot` is lost.** The pairwise table carries it — `apply_qc_filters` keeps
+   every row and annotates it from `dist < 1`, `r > 0.5`, `dist_r > 4`. The processed
+   table has no such column. This capsule never read it (it annotates its own geometric
+   QC from `dist` and `r`, which both tables carry), so nothing breaks; but note those
+   cutoffs differ from the ones in `ds_config.json` for these mice (`CENT_CUTOFF` 1.25,
+   `CORR_CUTOFF` 0.25, `DIST_CUTOFF` 1.0), which is worth understanding before anyone
+   relies on either.
 5. **Runtime.** Dropping the join should remove a large part of the 1,475 s of
    load/join/assembly measured on 800792, but the processed pickles are ~2× larger to
    read. Net effect unknown.

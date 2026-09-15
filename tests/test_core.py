@@ -1928,3 +1928,54 @@ def test_both_families_give_the_same_cellxgene_on_the_same_spots(tmp_path):
     assert out["pairwise"]["cellxgene"].equals(out["processed"]["cellxgene"])
     assert "fg" not in out["pairwise"]["spots"].columns
     assert {"fg", "bg", "fg_over_bg"} <= set(out["processed"]["spots"].columns)
+
+def test_slac17a7_is_corrected_everywhere_the_name_travels():
+    """Slac17a7 is a misspelling of the excitatory marker the class call is a ratio of.
+    Uncorrected, gene_column finds nothing and every cell comes back unassigned."""
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    assert A.GENE_ALIASES["Slac17a7"] == "Slc17a7"
+
+    # 1. at the gene map, which is what *_spot_change.csv's `gene` column comes from
+    fixed, changed = A.correct_gene_map({"488": "GFP", "561": "Slac17a7", "638": "Tac"},
+                                        round_key="R1")
+    assert fixed == {"488": "GFP", "561": "Slc17a7", "638": "Tac1"}
+    assert sorted(changed) == [("561", "Slac17a7", "Slc17a7"), ("638", "Tac", "Tac1")]
+
+    # 2. and at the table, for a CSV written before the correction existed
+    t = pd.DataFrame({"R1-488-GFP": [1], "R1-561-Slac17a7": [2]})
+    out, renames = A.rename_gene_aliases(t)
+    assert list(out.columns) == ["R1-488-GFP", "R1-561-Slc17a7"]
+    assert renames == [("R1-561-Slac17a7", "R1-561-Slc17a7")]
+    assert A.gene_column(out, "Slc17a7") == "R1-561-Slc17a7"
+
+
+def test_correct_gene_map_leaves_valid_symbols_alone():
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    good = {"488": "Npy", "514": "Pvalb", "561": "Cck", "594": "Sst", "638": "Vip"}
+    fixed, changed = A.correct_gene_map(good)
+    assert fixed == good and changed == []
+
+
+def test_a_class_call_survives_the_misspelling():
+    """End to end, and what the typo costs if it is not corrected.
+
+    Slc17a7 is the only excitatory marker in the panel and the class call is a ratio,
+    so a misspelled column leaves the ratio with one arm: every cell in the mouse comes
+    back `unassigned` and no cluster label is produced. Silent, and total.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    t = _fake_table(n_inh=150, n_exc=250)
+    t = t.rename(columns={"R1-561-Slc17a7": "R1-561-Slac17a7"})
+
+    bad_cls, bad_info, _ = A.assign_class(t)
+    assert bad_info["markers_available"]["excitatory"] == "none"
+    assert set(bad_cls.unique()) == {"unassigned"}
+
+    fixed, renames = A.rename_gene_aliases(t)
+    cls, info, _ = A.assign_class(fixed)
+    assert renames == [("R1-561-Slac17a7", "R1-561-Slc17a7")]
+    assert info["markers_available"]["excitatory"] == "R1-561-Slc17a7"
+    assert info["n_inhibitory"] > 100 and info["n_excitatory"] > 200

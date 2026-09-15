@@ -105,13 +105,46 @@ def parse_columns(columns):
     return pd.DataFrame(rows).set_index("column")
 
 
-#: Panel gene names that are WRONG and are corrected on load. `Tac` is the HCR panel's
-#: label for the Tac1 probe; it is not a gene symbol, and left alone it fails to match
-#: HCR_PANEL_15, so the inhibitory clustering silently runs on fourteen genes instead of
-#: fifteen. Every correction is announced -- see `rename_gene_aliases`. A silent rename
-#: would leave two names for one gene circulating in downstream analyses with nothing in
-#: the log to explain which is which.
-GENE_ALIASES = {"Tac": "Tac1"}
+#: Panel gene names that are WRONG and are corrected on load, with the reason each is
+#: wrong. Every correction is announced -- see `rename_gene_aliases` and
+#: `correct_gene_map`. A silent rename would leave two names for one gene circulating in
+#: downstream analyses with nothing in the log to explain which is which.
+#:
+#:   Tac        the HCR panel's label for the Tac1 probe. Not a gene symbol, and left
+#:              alone it fails to match HCR_PANEL_15, so the inhibitory clustering
+#:              silently runs on fourteen genes instead of fifteen.
+#:   Slac17a7   a misspelling of Slc17a7, the excitatory marker the class call is a
+#:              ratio of. Left alone, `gene_column(table, "Slc17a7")` finds nothing and
+#:              every cell comes back unassigned. AllenNeuralDynamics/
+#:              hcr-pairwise-spot-unmixing patches the same typo in its own output.
+#:
+#: Both originate in the acquisition metadata -- `processing_manifest.json`'s gene_dict,
+#: which is where the round -> channel -> gene map is read from -- so they are corrected
+#: at that boundary, not invented here.
+GENE_ALIASES = {"Tac": "Tac1", "Slac17a7": "Slc17a7"}
+
+
+def correct_gene_map(gene_map, round_key=None):
+    """{channel: gene} with wrong symbols corrected, announced per substitution.
+
+    Applied where the map is READ, because the gene name reaches more outputs than the
+    cell x gene table: `*_spot_change.csv` takes its `gene` column straight from this
+    map, and `rename_gene_aliases` -- which rewrites table column labels -- never sees
+    it. Correcting here fixes both from one place.
+
+    Returns (corrected map, [(channel, old, new), ...]).
+    """
+    out, changed = {}, []
+    for chan, gene in gene_map.items():
+        fixed = GENE_ALIASES.get(str(gene), str(gene))
+        out[chan] = fixed
+        if fixed != str(gene):
+            changed.append((str(chan), str(gene), fixed))
+            where = f" in {round_key}" if round_key else ""
+            print(f"WARNING: gene name '{gene}' is not a valid symbol and was corrected "
+                  f"to '{fixed}'{where} (channel {chan}). Downstream outputs use the "
+                  f"corrected name.", flush=True)
+    return out, changed
 
 
 def gene_name(column):
@@ -132,7 +165,10 @@ def rename_gene_aliases(table, aliases=None, warn=True):
     through a resolver.
 
     Idempotent: a table whose names are already correct is returned unchanged with an
-    empty rename list.
+    empty rename list. In a normal run `correct_gene_map` has already fixed the map the
+    columns were built from, so this pass finds nothing. It still matters for a table
+    that came from somewhere else -- `--relabel-from` on a CSV written before the
+    correction existed is the case that keeps it here.
     """
     aliases = dict(GENE_ALIASES if aliases is None else aliases)
     renames = {}
