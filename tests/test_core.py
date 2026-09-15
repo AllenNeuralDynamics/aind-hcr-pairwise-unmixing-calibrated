@@ -433,9 +433,17 @@ def test_subclass_floor_returns_unassigned_rather_than_a_guess():
 
     t = _fake_table(n_inh=20, n_exc=20)
     t.iloc[0, 2:6] = [3.0, 2.0, 1.0, 0.0]        # all four markers below 20
+    t.iloc[0, 6] = 4.0                            # and Cck below it too, so not Sncg
     sub, info = A.assign_subclass(t)
     assert sub.iloc[0] == "unassigned"
     assert info["count_floor"] == 20
+
+    # With Cck above the floor the same cell IS evidenced -- as Sncg, the subclass
+    # defined by a positive Cck signal and no marker claiming the cell.
+    t.iloc[0, 6] = 300.0
+    sub2, info2 = A.assign_subclass(t)
+    assert sub2.iloc[0] == "Sncg"
+    assert info2["n_sncg"] >= 1 and info2["sncg_gene"] == "Cck"
 
 
 def test_subclass_is_called_on_raw_counts_not_the_transform():
@@ -547,7 +555,7 @@ def test_cluster_names_use_absolute_level_above_the_floor():
                           [2.0, 0.2, 0.005]],
                          index=[0, 1], columns=genes)
     names, ordered = L.hcr_cluster_names(means, {0: "Pvalb", 1: "Pvalb"})
-    assert names[0] == "Pvalb-1 (Cck)", names[0]
+    assert names[0] == "Pvalb-1  Cck", names[0]
     assert names[1] == "Pvalb-2", "no gene clears the floor, so no invented suffix"
     assert "Mme" not in names[0]
     assert ordered == [0, 1]
@@ -805,6 +813,64 @@ def test_display_layer_is_transformed_within_class():
     tot = W[inh].sum(1)
     assert np.allclose(tot, np.median(tot), rtol=0.02)
     assert np.allclose(W[~inh & (adata.obs["class"] == "low_counts").to_numpy()].sum(1), 0)
+
+
+def test_sncg_per_cell_draws_only_from_unclaimed_cells():
+    """Sncg is the subclass defined by absence: Cck above the floor and every marker
+    below it. It must not take cells a marker already claimed."""
+    from aind_hcr_pairwise_unmixing_calibrated import labeling as L
+
+    markers = np.array([[0, 0, 0, 0],        # nothing -> Cck decides
+                        [0, 0, 0, 0],        # nothing, and Cck too low -> unassigned
+                        [400, 0, 0, 0],      # strong Pvalb -> stays Pvalb
+                        [25, 0, 0, 0]])      # weak but above floor -> stays Pvalb
+    base = np.array(["unassigned", "unassigned", "Pvalb", "Pvalb"], dtype=object)
+    out = L.hcr_sncg_cells(base, markers, np.array([300.0, 5.0, 300.0, 300.0]))
+    assert list(out) == ["Sncg", "unassigned", "Pvalb", "Pvalb"]
+
+
+def test_a_plurality_of_sncg_does_not_make_an_sncg_block():
+    """Sncg being a rare per-cell label makes the enrichment floor trivial to clear:
+    a 192-cell Crh cluster reached 14.5x on a 35% Sncg plurality with a Cck median of
+    40 counts. Cck leading the profile is the only route to the block."""
+    from aind_hcr_pairwise_unmixing_calibrated import labeling as L
+
+    means = pd.DataFrame({"Cck": [0.2], "Crh": [1.4], "Sst": [0.1],
+                          "Pvalb": [0.05], "Vip": [0.05], "Lamp5": [0.05]}, index=[0])
+    labels = np.zeros(100, dtype=int)
+    subclass = np.array(["Sncg"] * 40 + ["Sst"] * 30 + ["Vip"] * 30, dtype=object)
+    blocks, _ = L.hcr_cluster_blocks(means, subclass, labels)
+    assert blocks[0] == "Other", "a Crh-topped cluster is not Sncg"
+
+
+def test_cluster_names_have_no_brackets():
+    from aind_hcr_pairwise_unmixing_calibrated import labeling as L
+
+    means = pd.DataFrame({"Cck": [1.4], "Reln": [0.8], "Sst": [0.1]}, index=[0])
+    names, _ = L.hcr_cluster_names(means, {0: "Sncg"})
+    assert names[0] == "Sncg-1  Cck/Reln"
+    assert "(" not in names[0] and ")" not in names[0]
+
+
+def test_heatmap_axes_stop_at_the_last_row():
+    """A y-tick at n sits outside the image extent, so matplotlib autoscaled and added
+    its 5% margin -- 545 blank rows under a 10,896-cell figure, which reads as cells
+    with no signal."""
+    pytest.importorskip("anndata")
+    pytest.importorskip("matplotlib")
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A, plots as P
+
+    adata = A.build_anndata(_fake_table(), n_inh=4, n_exc=3)
+    a, clusters, blocks, bounds = P.block_layout(adata, ["inhibitory"])
+    fig, ax = plt.subplots()
+    _, n = P._panel(a, ax, list(adata.var_names), "normalized", False,
+                    clusters, blocks, bounds, True)
+    lo, hi = ax.get_ylim()
+    plt.close(fig)
+    assert (lo, hi) == (n - 0.5, -0.5), f"{n} rows but ylim {(lo, hi)}"
 
 
 def test_gene_map_reads_real_ds_config_shape(tmp_path):

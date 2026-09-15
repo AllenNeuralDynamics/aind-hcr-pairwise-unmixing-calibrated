@@ -66,13 +66,18 @@ import pandas as pd
 from .labeling import (HCR_COUNT_FLOOR, HCR_ENRICHMENT_FLOOR, HCR_NAME_FLOOR,
                        HCR_PANEL_15, HCR_SUBCLASS_COUNT_FLOOR, HCR_SUBCLASS_MARKERS,
                        hcr_class_call, hcr_cluster_blocks, hcr_cluster_names,
-                       hcr_subclass_argmax, hcr_transform_p95)
+                       hcr_sncg_cells, hcr_subclass_argmax, hcr_transform_p95)
 
 #: The two markers the class call is a ratio of, and the round each is imaged in.
 CLASS_MARKERS = {"excitatory": "Slc17a7", "inhibitory": "Gad2"}
 
 #: Canonical inhibitory subclasses, in the order blocks are grouped for output.
 SUBCLASS_GENES = tuple(HCR_SUBCLASS_MARKERS)
+
+#: The fifth subclass and the gene that defines it. Sncg has no positive marker of its
+#: own in this panel, so it is called from high Cck together with the ABSENCE of the
+#: four markers -- in the per-cell call, alongside them rather than after them.
+SNCG_GENE, SNCG_BLOCK = "Cck", "Sncg"
 
 #: Barred from the excitatory clustering space. Gad2 and Slc17a7 define the class, so
 #: clustering on them re-separates cells the class call already separated. GFP is a
@@ -257,9 +262,22 @@ def assign_subclass(table, markers=SUBCLASS_GENES,
 
     values = np.column_stack([table[cols[g]].to_numpy(float) for g in present])
     lab = hcr_subclass_argmax(values, markers=present, count_floor=count_floor)
+
+    # Sncg competes here, not afterwards: a cell with Cck above the floor and no
+    # marker above it belongs to the subclass defined by that absence. Drawn only
+    # from what the four-way call left unassigned -- see hcr_sncg_cells.
+    sncg_col = gene_column(table, SNCG_GENE)
+    n_sncg = 0
+    if sncg_col is not None:
+        lab = hcr_sncg_cells(lab, values, table[sncg_col].to_numpy(float),
+                             count_floor=count_floor, sncg_block=SNCG_BLOCK)
+        n_sncg = int((lab == SNCG_BLOCK).sum())
+
     out = pd.Series(lab, index=table.index, dtype=object)
     info = dict(markers_available=present, count_floor=int(count_floor),
                 n_per_subclass={g: int((out == g).sum()) for g in present},
+                sncg_gene=(SNCG_GENE if sncg_col is not None else None),
+                n_sncg=n_sncg,
                 n_unassigned=int((out == "unassigned").sum()))
     return out, info
 

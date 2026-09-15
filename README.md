@@ -382,15 +382,33 @@ The rules come from `matchings/hcr-inhibitory-consensus-capsule` (`code/PROTOCOL
 and are vendored in `labeling.py`, with the published constants copied rather than
 re-derived.
 
-**Three corrections since, found on 800792.** The `Sncg` promotion ranked *Cck* against
+**`Sncg` is now a per-cell subclass too**, decided alongside the four markers rather
+than only at the cluster level. Deciding it afterwards left the per-cell label
+contradicting the cluster: the 387 cells of 800792's *Cck* cluster have a median *Cck*
+of 224 counts against marker medians of 8–31, yet the four-way argmax put 337 of them in
+`Pvalb`/`Sst`/`Vip`/`Lamp5` on marker counts barely over the floor. This is a divergence
+from the cohort, whose per-cell call is four-way — but it takes nothing from the four
+subclasses: every cell labelled `Sncg` here was `unassigned` there (204 of 9,669 on
+800792, 93 of 7,016 on 800995), and agreement on the four marker subclasses stays
+**1.000** on both animals. A five-way argmax with *Cck* competing directly was rejected:
+*Cck* is broadly expressed rather than subclass-specific and would win 1,387 cells on
+800792, 1,124 of them taken from the four subclasses.
+
+**Cluster names carry no brackets** — `Sst-2  Reln/Cck`, the cohort figures' format.
+
+**Four corrections since, found on 800792.** The `Sncg` promotion ranked *Cck* against
 only the non-marker genes and so relabelled an *Sst* cluster (*Sst* 0.787, *Cck* 0.551);
 *Cck* must now lead every gene outright. Cluster names excluded only the block's own
 marker, which produced `Sncg-1 (Sst/Cck)`; all four markers are now excluded. And the
 figures displayed the all-cell transform while names came from the per-class one, so a
 named gene could be invisible in the panel beside it — the single-class figures now show
-`normalized_within_class`. The first of these is a deliberate divergence from the cohort
-protocol's `hcr_sncg_block`, which has the weaker test; the cohort's k = 18 over six mice
-produced no cluster that exposed it.
+`normalized_within_class`, which is the same scope the cohort run used (it selected
+inhibitory cells before transforming, so excitatory cells were never in its matrix).
+And a y-tick placed at row *n*, one past the image extent, made matplotlib autoscale and
+add its 5% margin: 545 blank rows under a 10,896-cell heatmap, which read as cells with
+no signal. The first of these is a deliberate divergence from the cohort protocol's
+`hcr_sncg_block`, which has the weaker test; the cohort's k = 18 over six mice produced
+no cluster that exposed it.
 
 **`Tac` is not a gene symbol** and is corrected to `Tac1` when the cell × gene table is
 built, with a `WARNING` line naming the substitution in the run log. Uncorrected it
@@ -588,8 +606,8 @@ handful of cells the same weight as one carrying real structure.
 | column | meaning |
 |---|---|
 | `class` | `inhibitory` / `excitatory` / `ambiguous` / `low_counts` — plus `unassigned` in the one degenerate case below, where a marker's round is absent and no call is possible at all. From a two-component Gaussian mixture on log2((Gad2+1)/(Slc17a7+1)) cut at posterior 0.90 and 0.10. Cells below 100 total counts are `low_counts` and take no part in the fit. A mixture rather than fixed per-marker thresholds: the boundary is set by the data's own two modes, so it tracks a mouse's detection depth instead of being calibrated on one animal and carried to the rest. Cells between the gates are `ambiguous` — around 1% in the cohort, and not a thresholding artefact: the fraction barely moves when the mixture is refitted per mouse and does not fall with library size |
-| `subclass` | `Pvalb` / `Sst` / `Vip` / `Lamp5` / `unassigned` / `none`, a **per-cell** call: whichever of the four markers carries the most **raw counts**, with a winner below 20 counts returning `unassigned`. On raw counts, not the transform — the p95 stage makes Lamp5 render about 3× darker than Sst at equal counts and moves the call. `none` on cells the class call did not place in the inhibitory class |
-| `cluster` | readable name, e.g. `Pvalb-2 (Mme/Cck)` — subclass block, index within block, then up to three genes whose cluster mean exceeds 0.5 in transform units. The **absolute** level, not deviation across clusters: a gene can deviate strongly and still be low everywhere, producing a name that reads as a marker for something the cluster barely expresses. **All four subclass markers are excluded** from the gene list, not just the block's own: the prefix already carries the subclass, and a name like `Sncg-1 (Sst/Cck)` asserts a contradiction — where that happens the block call is what needs fixing, and a name that hides it is worse than one that omits a gene. A cluster with no non-marker gene above the floor gets a bare `Vip-2` rather than an invented marker |
+| `subclass` | `Pvalb` / `Sst` / `Vip` / `Lamp5` / `Sncg` / `unassigned` / `none`, a **per-cell** call: whichever of the four markers carries the most **raw counts**, with a winner below 20 counts returning `unassigned`. On raw counts, not the transform — the p95 stage makes Lamp5 render about 3× darker than Sst at equal counts and moves the call. Then `Sncg`, **decided here rather than afterwards**: a cell whose *Cck* clears the 20-count floor while all four markers fall below it is `Sncg`, the subclass defined by that absence. `none` on cells the class call did not place in the inhibitory class |
+| `cluster` | readable name, e.g. `Pvalb-2  Mme/Cck` — subclass block, index within block, then up to three genes whose cluster mean exceeds 0.5 in transform units. The **absolute** level, not deviation across clusters: a gene can deviate strongly and still be low everywhere, producing a name that reads as a marker for something the cluster barely expresses. **All four subclass markers are excluded** from the gene list, not just the block's own: the prefix already carries the subclass, and a name like `Sncg-1  Sst/Cck` asserts a contradiction — where that happens the block call is what needs fixing, and a name that hides it is worse than one that omits a gene. A cluster with no non-marker gene above the floor gets a bare `Vip-2` rather than an invented marker |
 | `cluster_id` | integer label; `-1` for cells that were not clustered (`ambiguous`, `low_counts`, or an all-zero profile) |
 | `p_inhibitory` | the mixture posterior the class call was cut from, so a borderline cell is visible rather than just labelled |
 | `total_counts`, `n_genes` | per-cell depth and the number of genes detected |
@@ -601,8 +619,15 @@ share of the background composition — enrichment rather than raw purity, becau
 modest share of a rare subclass is strong concentration while the same share of a common
 one is none. Clusters below the floor become `Other`.
 
-One post-hoc rule sits on top. *Sncg* is defined by **high *Cck* with no other subclass
-marker**, and it is the one subclass the four markers cannot express, so a cluster whose
+`Sncg` is not assignable by plurality, for the same reason `unassigned` is not: it is a
+rare per-cell label — 2.4% of inhibitory cells on 800792 — so the enrichment floor is
+trivial to clear. A 192-cell *Crh* cluster reached 14.5× on a 35% `Sncg` plurality while
+its own *Cck* median was 40 counts against the genuine *Cck* cluster's 224. Its top gene
+is *Crh*; it is `Other`. The *Cck* test below is the only route to an `Sncg` block.
+
+That test is the post-hoc rule that sits on top. *Sncg* is defined by **high *Cck* with
+no other subclass marker**, and it is the one subclass the four markers cannot express,
+so a cluster whose
 **highest gene outright** is *Cck* — above the 0.5 naming threshold and leading the
 runner-up by 1.5× — is promoted to `Sncg`. Highest outright, with *Pvalb*/*Sst*/*Vip*/
 *Lamp5* left in the comparison: ranking *Cck* against only the non-marker genes, as the
@@ -989,13 +1014,14 @@ the excitatory side, so that k is this capsule's own and was not swept.
 
 Names are block-first with up to three genes whose cluster mean exceeds **0.5 in
 transform units** — the absolute level, not deviation across clusters, because a gene
-can deviate strongly and still be low everywhere. The block's own marker is excluded,
-since it is already the prefix:
+can deviate strongly and still be low everywhere. All four subclass markers are excluded
+— the prefix already carries the subclass, and a name pointing at a different
+subclass's marker asserts a contradiction:
 
 ```
-Pvalb-2 (Mme/Cck)               Sncg-1 (Cck/Calb2)
-Lamp5-1 (Reln/Hpse/Ndnf)        Vip-3 (Crh/Npy)
-Sst-4 (Calb2/Npy)               Exc-1 (...)
+Pvalb-2  Mme/Cck                Sncg-1  Cck
+Lamp5-1  Reln/Hpse/Ndnf         Vip-3  Chat/Calb2
+Sst-4  Hpse/Reln                Vip-2
 ```
 
 A cluster with no gene above the naming floor gets no suffix rather than an invented one.

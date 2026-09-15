@@ -126,6 +126,36 @@ def hcr_subclass_argmax(marker_values, markers=None,
     return lab
 
 
+def hcr_sncg_cells(subclass, marker_values, sncg_values,
+                   count_floor=HCR_SUBCLASS_COUNT_FLOOR, sncg_block="Sncg"):
+    """Relabel `unassigned` cells with high Cck as Sncg, in the PER-CELL call.
+
+    Sncg is the subclass defined by what it lacks: high Cck and no convincing
+    Pvalb/Sst/Vip/Lamp5. So a cell is Sncg when Cck clears `count_floor` and every
+    one of the four markers falls below it -- the cell has a positive signal and
+    nothing else claims it.
+
+    This runs as part of the per-cell subclass call rather than only at the cluster
+    level. Deciding Sncg afterwards leaves the per-cell label contradicting the
+    cluster: on 800792 the 387 cells of the Cck cluster have a median Cck of 224
+    counts against marker medians of 8-31, yet the four-way argmax put 337 of them in
+    Pvalb/Sst/Vip/Lamp5 on marker counts barely over the floor.
+
+    Deliberately NOT a five-way argmax with Cck as a fifth candidate: Cck is broadly
+    expressed rather than subclass-specific, and letting it compete directly wins
+    1,387 cells on 800792 -- 1,124 of them taken from the four subclasses. This rule
+    draws only from cells no marker claimed (263 cells, 2.4% of inhibitory).
+
+    A DIVERGENCE from the cohort protocol, whose per-cell call is four-way with Sncg
+    applied only to clusters. Cells labelled Sncg here are `unassigned` there.
+    """
+    v = np.asarray(marker_values, dtype=float)
+    cck = np.asarray(sncg_values, dtype=float)
+    out = np.asarray(subclass, dtype=object).copy()
+    out[(v.max(1) < count_floor) & (cck >= count_floor)] = sncg_block
+    return out
+
+
 def hcr_cluster_blocks(cluster_means, per_cell_subclass, labels,
                        enrichment_floor=HCR_ENRICHMENT_FLOOR,
                        name_floor=HCR_NAME_FLOOR,
@@ -167,12 +197,19 @@ def hcr_cluster_blocks(cluster_means, per_cell_subclass, labels,
     bg = sub.value_counts(normalize=True)
 
     blocks, rows = {}, []
+    # `unassigned` is not a block, and neither is a plurality of Sncg: Sncg means
+    # Cck-defined, and the Cck test below is the only route to it. Without this, Sncg
+    # being a rare per-cell label (2.4% of inhibitory on 800792) makes the enrichment
+    # floor trivial to clear -- a 192-cell Crh cluster reached 14.5x enrichment on a
+    # 35% Sncg plurality while its own Cck median was 40 counts against the genuine
+    # Cck cluster's 224. Its top gene is Crh; it is not an Sncg cluster.
+    not_a_block = ("unassigned", sncg_block)
     for c in cluster_means.index:
         m = labels == c
         vc = sub[m].value_counts(normalize=True)
         plur, purity = vc.idxmax(), float(vc.max())
         enrich = float(purity / bg[plur]) if bg.get(plur, 0) > 0 else np.nan
-        block = plur if (plur != "unassigned" and enrich >= enrichment_floor) else "Other"
+        block = plur if (plur not in not_a_block and enrich >= enrichment_floor) else "Other"
         rows.append(dict(cluster=c, plurality=plur, purity=purity,
                          enrichment=enrich, block_before_sncg=block, n=int(m.sum())))
         blocks[c] = block
@@ -240,6 +277,7 @@ def hcr_cluster_names(cluster_means, blocks, name_floor=HCR_NAME_FLOOR,
             profile = cluster_means.loc[c].drop(labels=markers, errors="ignore")
             top = [g for g, v in profile.sort_values(ascending=False).items()
                    if v > name_floor][:n_markers]
-            names[c] = f"{block}-{i}" + (f" ({'/'.join(map(str, top))})" if top else "")
+            # `Sst-2  Reln/Cck`, no brackets -- the cohort figures' format.
+            names[c] = f"{block}-{i}" + (f"  {'/'.join(map(str, top))}" if top else "")
             ordered.append(c)
     return names, ordered

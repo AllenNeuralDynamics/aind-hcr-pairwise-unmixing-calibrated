@@ -157,8 +157,14 @@ def _panel(a, ax, columns, display, full_labels, clusters, blocks, boundaries,
                        else [a.var.loc[c, "gene"] for c in columns],
                        rotation=90, fontsize=(5.6 if full_labels else 6.4),
                        style=("normal" if full_labels else "italic"))
-    ax.set_yticks([0, n])
+    # The bottom tick sits on the LAST ROW, n - 1, not on n. A tick at n is outside
+    # the image extent (which ends at n - 0.5), so matplotlib autoscaled to include it
+    # and added its default 5% y-margin -- 545 rows of white below the data on a
+    # 10,896-cell figure, which reads as cells with no signal. ylim is then pinned so
+    # no later artist can reintroduce the margin.
+    ax.set_yticks([0, n - 1])
     ax.set_yticklabels(["0", f"{n:,}"], fontsize=6.8)
+    ax.set_ylim(n - 0.5, -0.5)
     for _, _, end, _ in clusters[:-1]:
         ax.axhline(end, color="#2e8b57", lw=0.26, ls="--")
     for b in boundaries:
