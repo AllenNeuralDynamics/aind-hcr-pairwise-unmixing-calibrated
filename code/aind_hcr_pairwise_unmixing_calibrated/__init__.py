@@ -27,4 +27,4 @@ from .control import control_matrix, load_powers, powers_from_acquisition  # noq
 from .fgbg import attach_fg_bg, bg_mad_threshold  # noqa: F401
 from .pipeline import run_mouse, run_round  # noqa: F401
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"

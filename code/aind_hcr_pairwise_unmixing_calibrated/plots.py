@@ -54,18 +54,18 @@ def gene_order(var, kind="std"):
     """Column order for the heatmap: 'std' biology-grouped, or 'rc' acquisition order.
 
     `var` is `adata.var`, carrying a `gene` column alongside the round-channel-gene
-    column names. Tac is matched to Tac1 -- the panel labels it Tac while the standard
-    order uses the Tac1 synonym.
+    column names. Wrong panel names are resolved through the same alias map the cell x
+    gene table is corrected with, so a `var` built before that correction still orders
+    `Tac` under `Tac1`, in position, rather than falling through to the tail.
     """
     if kind == "rc":
         # sorted() on the tuple key, not np.argsort -- argsort on a list of tuples builds
         # a 2-D array and then fails on multi-dimensional index selection.
         return sorted(var.index, key=_rc_key)
-    out = []
-    for want in STD_GENE_ORDER:
-        for col in var.index:
-            if var.loc[col, "gene"] == ("Tac" if want == "Tac1" else want):
-                out.append(col)
+    from .annotate import GENE_ALIASES
+    genes = {col: GENE_ALIASES.get(var.loc[col, "gene"], var.loc[col, "gene"])
+             for col in var.index}
+    out = [col for want in STD_GENE_ORDER for col in var.index if genes[col] == want]
     return out + [c for c in var.index if c not in out]
 
 

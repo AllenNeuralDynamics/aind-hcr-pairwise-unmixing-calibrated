@@ -1733,3 +1733,23 @@ def test_duplicate_check_fails_closed():
     assert rra.asset_exists(name, "t", "d") is True
     rra._api = lambda *a, **k: {"results": [{"name": name + "_v2"}], "has_more": False}
     assert rra.asset_exists(name, "t", "d") is False
+
+
+def test_tac1_sorts_into_its_standard_position_not_the_tail():
+    """The order list always said Tac1; the matcher compared it against the panel's
+    old `Tac`, so once the name was corrected upstream nothing matched and Tac1 fell
+    through to the trailing unordered genes, after Gad2."""
+    pytest.importorskip("anndata")
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A, plots as P
+
+    adata = A.build_anndata(_fake_table(), n_inh=4, n_exc=3)
+    adata.var.loc[adata.var.index[0], "gene"] = "Tac1"
+    adata.var.loc[adata.var.index[1], "gene"] = "Tac2"
+    order = [adata.var.loc[c, "gene"] for c in P.gene_order(adata.var, "std")]
+    assert order.index("Tac1") == order.index("Tac2") - 1
+    assert order[-1] != "Tac1"
+
+    # a var built before the correction must land in the same place
+    adata.var.loc[adata.var.index[0], "gene"] = "Tac"
+    legacy = [adata.var.loc[c, "gene"] for c in P.gene_order(adata.var, "std")]
+    assert legacy.index("Tac") == legacy.index("Tac2") - 1
