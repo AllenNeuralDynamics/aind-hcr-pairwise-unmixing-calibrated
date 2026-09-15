@@ -361,6 +361,15 @@ def main(argv=None):
                          "several processed assets exist and you know which one you want.")
     ap.add_argument("--processed-root", default=None,
                     help="parent dir of processed assets; default = --data-dir")
+    ap.add_argument("--spots-from", default="auto",
+                    choices=("auto", "pairwise", "processed"),
+                    help="which mixed_spots_<R>.pkl to read. 'pairwise' is the "
+                         "HCR_<mouse>_pairwise-unmixing asset, the spot set every "
+                         "result so far was produced from. 'processed' is the copy in "
+                         "each processed asset, which additionally carries "
+                         "chan_<ch>_fg / _bg so the fg/bg join is skipped -- but it "
+                         "holds 2-4%% more spots, so it does NOT reproduce the same "
+                         "cell x gene table. 'auto' prefers pairwise when attached.")
     ap.add_argument("--relabel-from", default=None, metavar="PATH",
                     help="skip the unmixing entirely and rebuild ONLY the labels from "
                          "an existing <mouse>_cellxgene.csv. PATH is that file or the "
@@ -438,6 +447,7 @@ def main(argv=None):
         processed_folder=args.processed_folder,
         output_dir=args.output_dir,
         use_fgbg=not args.no_fgbg,
+        spots_from=args.spots_from,
         write_metadata=not args.no_metadata,
         write_anndata=not args.no_anndata,
         write_plots=not args.no_plots,

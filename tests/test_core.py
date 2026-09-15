@@ -1815,3 +1815,116 @@ def test_gene_map_prefers_ds_config_when_present(tmp_path):
     got = run_capsule.gene_map_for_round(
         data / "HCR_800792_pairwise-unmixing_x", "800792", "R5", processed_root=data)
     assert got == {"488": "Npy"}
+
+
+# ---------------------------------------------------------------- spots_io
+#
+# Two different tables are named mixed_spots_<R>.pkl. The processed asset's is a
+# column superset of the pairwise asset's: it keeps chan_<ch>_fg and _bg, where the
+# pairwise one keeps only their difference. See spots_io and PROCESSED_ONLY.md.
+
+def _two_family_fixture(tmp_path, mouse="800792", rnd="R5", n=300):
+    chans = ["488", "514", "561"]
+    rng = np.random.RandomState(3)
+    sp = pd.DataFrame({
+        "spot_id": np.arange(n), "chan": rng.choice(chans, n),
+        "chan_spot_id": np.arange(n), "cell_id": rng.randint(1, 40, n), "round": 5,
+        "z": rng.rand(n), "y": rng.rand(n) * 100, "x": rng.rand(n) * 100,
+        "z_center": 0.0, "y_center": 0.0, "x_center": 0.0,
+        "dist": rng.rand(n), "r": rng.rand(n)})
+    for c in chans:
+        fg, bg = rng.uniform(200, 900, n), rng.uniform(40, 200, n)
+        sp[f"chan_{c}_fg"], sp[f"chan_{c}_bg"] = fg, bg
+        sp[f"chan_{c}_intensity"] = fg - bg
+    pw_dir = tmp_path / f"HCR_{mouse}_pairwise-unmixing_d" / f"{mouse}_{rnd}"
+    pr_dir = tmp_path / f"HCR_{mouse}_2026-04-08_processed_d" / "image_spot_spectral_unmixing"
+    pw_dir.mkdir(parents=True); pr_dir.mkdir(parents=True)
+    sp.to_pickle(pr_dir / f"mixed_spots_{rnd}.pkl")
+    sp.drop(columns=[f"chan_{c}_{k}" for c in chans for k in ("fg", "bg")]).to_pickle(
+        pw_dir / f"mixed_spots_{rnd}.pkl")
+    return sp, chans
+
+
+def test_schema_is_detected_from_columns_not_from_the_path(tmp_path):
+    """A table that carries chan_<ch>_fg can supply fg/bg natively wherever it came
+    from. Detecting by directory name would misread a relocated or copied file."""
+    from aind_hcr_pairwise_unmixing_calibrated import spots_io
+
+    sp, chans = _two_family_fixture(tmp_path)
+    proc = spots_io.describe_schema(sp)
+    pw = spots_io.describe_schema(sp.drop(
+        columns=[f"chan_{c}_{k}" for c in chans for k in ("fg", "bg")]))
+    assert (proc["family"], proc["has_native_fgbg"]) == ("processed", True)
+    assert (pw["family"], pw["has_native_fgbg"]) == ("pairwise", False)
+    assert proc["channels"] == pw["channels"] == chans
+
+
+def test_auto_prefers_the_pairwise_table(tmp_path):
+    """Every result to date came from the pairwise spot set. Changing input must be an
+    explicit choice, not a consequence of which assets happen to be attached."""
+    from aind_hcr_pairwise_unmixing_calibrated import spots_io
+
+    _two_family_fixture(tmp_path)
+    for src, want in (("auto", "pairwise"), ("pairwise", "pairwise"),
+                      ("processed", "processed")):
+        _, fam = spots_io.find_spot_table("R5", "800792", tmp_path, source=src)
+        assert fam == want, src
+
+
+def test_processed_source_says_what_to_attach(tmp_path):
+    from aind_hcr_pairwise_unmixing_calibrated import spots_io
+
+    (tmp_path / "HCR_800792_pairwise-unmixing_d" / "800792_R5").mkdir(parents=True)
+    (tmp_path / "HCR_800792_pairwise-unmixing_d" / "800792_R5"
+     / "mixed_spots_R5.pkl").write_bytes(b"x")
+    with pytest.raises(SystemExit, match="processing_manifest"):
+        spots_io.find_spot_table("R5", "800792", tmp_path, source="processed")
+
+
+def test_native_fg_bg_takes_each_row_from_its_own_channel(tmp_path):
+    """Borrowing another channel's background would be silently wrong, so a row whose
+    channel has no column stays NaN and the coverage check fires."""
+    from aind_hcr_pairwise_unmixing_calibrated import pipeline
+
+    sp, chans = _two_family_fixture(tmp_path)
+    fg, bg = pipeline._native_fg_bg(sp, chans)
+    own_fg = np.array([sp[f"chan_{c}_fg"].iloc[i] for i, c in enumerate(sp["chan"])])
+    own_bg = np.array([sp[f"chan_{c}_bg"].iloc[i] for i, c in enumerate(sp["chan"])])
+    assert np.allclose(fg, own_fg) and np.allclose(bg, own_bg)
+    # and it reproduces the intensity the upstream step recorded: intensity = fg - bg
+    own_i = np.array([sp[f"chan_{c}_intensity"].iloc[i] for i, c in enumerate(sp["chan"])])
+    assert np.allclose(fg - bg, own_i)
+
+    assert pipeline._native_fg_bg(
+        sp.drop(columns=[f"chan_{c}_fg" for c in chans]), chans) is None
+
+
+def test_native_fg_bg_refuses_partial_channel_coverage(tmp_path):
+    from aind_hcr_pairwise_unmixing_calibrated import pipeline
+
+    sp, chans = _two_family_fixture(tmp_path)
+    short = sp.drop(columns=["chan_561_fg", "chan_561_bg"])
+    with pytest.raises(RuntimeError, match="covered only"):
+        pipeline._native_fg_bg(short, chans)
+
+
+def test_both_families_give_the_same_cellxgene_on_the_same_spots(tmp_path):
+    """The schema change must be exactly that. Run the identical spot set through both
+    paths: the processed one additionally carries fg/bg, and nothing else moves.
+
+    This is the controlled half of the comparison. The uncontrolled half -- the
+    processed asset holding 2-4% MORE spots -- is a different table, not a different
+    schema, and can only be assessed on real data.
+    """
+    from aind_hcr_pairwise_unmixing_calibrated import pipeline, spots_io
+
+    sp, chans = _two_family_fixture(tmp_path, n=800)
+    gene_map = dict(zip(chans, ["Npy", "Pvalb", "Cck"]))
+    powers = {c: 10.0 for c in chans}
+    out = {}
+    for src in ("pairwise", "processed"):
+        frame, _ = spots_io.load_spot_table("R5", "800792", tmp_path, source=src)
+        out[src] = pipeline.run_round(frame, powers, gene_map, "R5", channels=chans)
+    assert out["pairwise"]["cellxgene"].equals(out["processed"]["cellxgene"])
+    assert "fg" not in out["pairwise"]["spots"].columns
+    assert {"fg", "bg", "fg_over_bg"} <= set(out["processed"]["spots"].columns)

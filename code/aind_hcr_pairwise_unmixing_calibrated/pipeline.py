@@ -17,6 +17,42 @@ from . import metadata
 from .fgbg import attach_fg_bg, diagonal_stats_path
 
 
+def _native_fg_bg(spots, channels):
+    """(fg, bg) per row from the table's own chan_<ch>_fg / _bg columns, else None.
+
+    Each row belongs to one channel, so the per-row value is that channel's column --
+    the same selection `attach_fg_bg` performs after reconstructing the values from a
+    separate stats file. Returns None when the columns are absent, which is the
+    pairwise table and means the join is still needed.
+
+    A row whose `chan` has no matching column stays NaN rather than borrowing another
+    channel's value; the caller's coverage check then fails loudly instead of the
+    pipeline proceeding on a silently wrong background.
+    """
+    from . import spots_io
+
+    fg_cols = spots_io.channel_columns(spots, "fg")
+    bg_cols = spots_io.channel_columns(spots, "bg")
+    if not fg_cols or set(fg_cols) != set(bg_cols):
+        return None
+
+    chan = spots["chan"].astype(str).to_numpy()
+    fg = np.full(len(spots), np.nan)
+    bg = np.full(len(spots), np.nan)
+    for c in fg_cols:
+        m = chan == str(c)
+        if m.any():
+            fg[m] = spots.loc[m, fg_cols[c]].to_numpy(float)
+            bg[m] = spots.loc[m, bg_cols[c]].to_numpy(float)
+    covered = float(np.isfinite(fg).mean())
+    if covered < 0.99:
+        raise RuntimeError(
+            f"native fg/bg covered only {covered:.1%} of spots: the table has columns "
+            f"for channels {sorted(fg_cols)} but `chan` also holds "
+            f"{sorted(set(chan) - {str(c) for c in fg_cols})[:6]}.")
+    return fg, bg
+
+
 def run_round(spots, powers, gene_map, round_key, B_ctrl=None,
               diag_paths=None, channels=CHANS, **unmix_kw):
     """Unmix one round.
@@ -37,7 +73,16 @@ def run_round(spots, powers, gene_map, round_key, B_ctrl=None,
     spots["chan"] = spots["chan"].astype(str)
 
     fg_bg = None
-    if diag_paths:
+    native = _native_fg_bg(spots, channels)
+    if native is not None:
+        # The processed asset's table already carries chan_<ch>_fg / _bg, so the
+        # exact-coordinate join is not just unnecessary here, it is strictly worse:
+        # the join reconstructs by matching coordinates against a separate stats file,
+        # while these columns are the values the intensity was computed FROM.
+        fg_bg = native
+        print(f"  fg/bg: native columns on the spot table ({len(channels)} channels); "
+              f"join skipped", flush=True)
+    elif diag_paths:
         fg, bg = attach_fg_bg(spots, diag_paths, channels)
         matched = float(np.isfinite(fg).mean())
         if matched < 0.99:
@@ -166,8 +211,14 @@ def _narrow(spots):
 def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
               powers_by_round=None, output_dir=None, use_fgbg=True,
               processed_folder=None, write_metadata=True, experimenter=None,
-              write_anndata=True, write_plots=True, write_spots=True, **unmix_kw):
+              write_anndata=True, write_plots=True, write_spots=True,
+              spots_from="auto", **unmix_kw):
     """Unmix every round of one mouse and concatenate the cell x gene tables.
+
+    spots_from  which family of spot table to read: "auto" (pairwise when attached),
+                "pairwise", or "processed". See spots_io -- the processed table is a
+                column superset and makes the fg/bg join unnecessary, but it carries
+                2-4% more spots, so the two do not produce the same cell x gene table.
 
     Writes per-round spot tables and a combined cell x gene table when output_dir is
     given. Laser power is read per round from acquisition.json unless powers_by_round
@@ -182,14 +233,22 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
     _t_all = _time.time()
     asset_dir = Path(asset_dir)
     cxgs, seps, logs, summary = [], [], [], []
+    schemas = {}
     _n_rounds = len(rounds)
     for _i_round, round_key in enumerate(rounds, start=1):
         # A six-round mouse is tens of minutes of work. Announce each round so a long
         # silence is distinguishable from a hang, and so the remaining time is legible.
         print(f"\n=== round {_i_round}/{_n_rounds}: {round_key} "
               f"({_time.time() - _t_all:.0f}s elapsed) ===", flush=True)
-        pkl = asset_dir / f"{mouse_id}_{round_key}" / f"mixed_spots_{round_key}.pkl"
-        spots = pd.read_pickle(pkl)
+        from . import spots_io
+        spots, _schema = spots_io.load_spot_table(
+            round_key, mouse_id, processed_root or asset_dir.parent,
+            source=spots_from, asset_dir=asset_dir)
+        print(f"  spots  : {_schema['n_rows']:,} rows from the {_schema['family']} "
+              f"table ({_schema['asset']})", flush=True)
+        schemas[round_key] = {k: v for k, v in _schema.items()
+                              if k in ("family", "has_native_fgbg", "n_rows",
+                                       "channels", "asset", "path")}
         acq_path, diag = round_inputs_from_asset(
             asset_dir, mouse_id, round_key, processed_root,
             processed_folder=processed_folder)
@@ -246,6 +305,7 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
     print(f"  cell x gene: {table.shape[0]:,} cells x {table.shape[1]} genes "
           f"({_time.time() - _t_post:.0f}s)", flush=True)
     result = dict(cellxgene=table,
+                  spot_tables=schemas,
                   separability=pd.concat(seps, ignore_index=True),
                   decisions=pd.concat(logs, ignore_index=True),
                   summary=pd.DataFrame(summary))
