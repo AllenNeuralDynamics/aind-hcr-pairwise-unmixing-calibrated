@@ -159,6 +159,20 @@ annotate-don't-filter trade this capsule makes everywhere else — the rows are 
 for what they are and a downstream consumer can drop them, rather than being removed
 here by a rule nobody downstream can see.
 
+## Decision: keep the recovered cells (2026-09-20)
+
+The ROI-rejected cells stay in the table, labelled for what they are, and a downstream
+consumer drops them. This is the same trade the capsule makes for geometric QC and for
+intensity thresholding: annotate here, decide there. The published cell count for a
+mouse rises by ~14%, almost all of it `low_counts` rows, and that is a sentence in the
+resource paper rather than a surprise for whoever counts rows.
+
+**Sequencing.** `--spots-from auto` still prefers the pairwise table. It flips to
+processed once the six-round run confirms that class and subclass do not move on shared
+cells — the wider population shifts the class mixture, and that is the one route by
+which this change can alter a label on a cell that was already there. Until then the
+default stays where every shipped result came from.
+
 ## What is NOT settled, and must be checked on real data
 
 1. ~~How much does the cell × gene table move~~ — **answered on R2, above.** What
