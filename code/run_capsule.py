@@ -481,6 +481,13 @@ def main(argv=None):
     # fg/bg columns that are not there.
     if args.no_fgbg:
         fgbg_status = "skipped (--no-fgbg)"
+    elif args.spots_from == "processed":
+        # The processed spot tables carry chan_<ch>_fg / _bg themselves, so the join
+        # does not run whatever image_spot_detection holds. Reporting the join here
+        # because those folders exist was exactly the kind of claim this block was
+        # written to prevent -- the per-round line said "join skipped" one screen later.
+        fgbg_status = ("native columns on the processed spot tables; "
+                       "image_spot_detection not read")
     else:
         found = [r for r in rounds
                  if pipeline.round_inputs_from_asset(

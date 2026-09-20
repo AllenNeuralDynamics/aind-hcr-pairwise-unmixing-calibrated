@@ -115,11 +115,56 @@ and class / subclass / cluster labels are computed on that slightly wider popula
 cohort run drops them at its own ROI stage. Whether the wider population moves any
 per-cell label materially is measurable — item 1 below.
 
+## Validated on 800792 R2 (v0.5.1, `7e155a3`)
+
+Both arms run, same mouse, same round, `--no-spots`. Each read exactly the row count
+predicted from the pickle headers — 11,339,232 pairwise, 11,570,896 processed — so each
+arm read what was intended.
+
+**The unmixing is unchanged.** Per-channel spot change agrees to within 0.2 percentage
+points across all five channels (Ndnf −2.09 / −2.03, Hpse −53.87 / −54.05, Pthlh −11.23
+/ −11.18, Chat −31.40 / −31.35, Tac1 −4.12 / −4.17; pairwise / processed). Of 105,003
+shared cells, 103,110 (**98.2%**) are identical across every gene, the largest count
+change on any shared cell is **2**, and per-gene totals on shared cells move by −0.001%
+to −0.053%. The residual is the expected one: extra spots from recovered cells change a
+few crosstalk neighbourhoods, and the direction is consistently a small loss.
+
+**The recovered cells are nearly empty.** 14,523 cells appear in the processed arm that
+were absent from the pairwise arm — **13.8% more cells** — with median total counts of
+**4** against **75** for shared cells, and 97.6% of them below the 100-count class floor
+*on this single round*.
+
+| | pairwise | processed |
+|---|---|---|
+| spots in | 11,339,232 | 11,570,896 (+2.0%) |
+| cells out | 105,003 | 119,526 (+13.8%) |
+| median total counts, shared cells | 75 | 75 |
+| median total counts, added cells | — | 4 |
+
+The two gaps differ by nearly an order of magnitude — 2% of spots but 14% of cells —
+and that is the whole character of the ROI filter: it was removing many ROIs that
+carried almost no transcripts. Anyone reasoning about its effect from the spot counts
+alone (as an earlier version of this file did) will badly underestimate how many cells
+it touched.
+
+**Caveat on the 97.6%.** The 100-count floor applies to a cell's total across all 27
+gene-rounds, and this was measured on 5. The added cells are ~19× dimmer than shared
+cells per round, so most would still fall below the floor on a six-round run, but the
+exact fraction — and therefore the number of recovered cells that actually receive class
+and subclass labels — needs the full run. On R2 alone, 349 of the 14,523 clear the floor.
+
+**Verdict: nothing is ruined.** Shared cells are effectively untouched; the cost is a
+13.8% longer table whose added rows are overwhelmingly `low_counts`. That is the
+annotate-don't-filter trade this capsule makes everywhere else — the rows are labelled
+for what they are and a downstream consumer can drop them, rather than being removed
+here by a rule nobody downstream can see.
+
 ## What is NOT settled, and must be checked on real data
 
-1. **How much does the cell × gene table move** — cells as well as counts — once the
-   ROI-rejected cells are included. Compare against the registered `unmixed-calibrated`
-   asset for the same mouse. The mechanism is now known; the magnitude is not.
+1. ~~How much does the cell × gene table move~~ — **answered on R2, above.** What
+   remains is the six-round version of the same question: how many of the recovered
+   cells clear the 100-count floor across all 27 gene-rounds and therefore receive
+   class, subclass and cluster labels. On one round it is 349 of 14,523.
 2. **Do the native fg/bg agree with what the join reconstructs?** The join was validated
    to r = 1.000000 against the pipeline's own subtracted value on 800995 R5. Run one
    round both ways and compare `fg` and `bg` per spot. If they disagree, the join's
