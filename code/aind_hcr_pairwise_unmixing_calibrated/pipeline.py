@@ -291,7 +291,8 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
               f"table ({_schema['asset']})", flush=True)
         schemas[round_key] = {k: v for k, v in _schema.items()
                               if k in ("family", "has_native_fgbg", "n_rows",
-                                       "channels", "asset", "path")}
+                                       "channels", "asset", "path",
+                                       "superseded_round_index")}
         acq_path, diag = round_inputs_from_asset(
             asset_dir, mouse_id, round_key, processed_root,
             processed_folder=processed_folder)
@@ -443,6 +444,13 @@ def _write_asset_metadata(asset_dir, mouse_id, rounds, outp, processed_root,
                     "processed_folder": processed_folder,
                     "spots_from": sorted({v["family"]
                                           for v in _spot_tables.values()}) or None,
+                    # Rounds read from a mixed_spots_R-1.pkl: that asset's own round,
+                    # January 2026 vintage, used where the corrected rewrite is absent.
+                    # Named here because it is a real difference in the data, not a
+                    # path detail -- at R1 the rewrite changed the output.
+                    "rounds_from_superseded_spot_index": sorted(
+                        r for r, v in _spot_tables.items()
+                        if v.get("superseded_round_index")) or None,
                     **_jsonable(params)},
         # Only claim files that were actually written: processing.json is the record of
         # what this asset contains, and naming absent spot tables would make it wrong.

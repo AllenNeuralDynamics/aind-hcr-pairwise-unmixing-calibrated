@@ -181,6 +181,26 @@ def normalize_app_panel_args(args):
         args.rounds = None
 
 
+def _superseded_note(spot_tables):
+    """A line for the asset description naming rounds read from a mixed_spots_R-1.pkl.
+
+    In the description rather than only in processing.json because this is the kind
+    of difference a reader needs before comparing one mouse against another: the
+    round is right, the processing vintage is not the same as the rest of the cohort.
+    """
+    rounds = sorted(r for r, v in spot_tables.items()
+                    if v.get("superseded_round_index"))
+    if not rounds:
+        return None
+    return (f"NOTE: {', '.join(rounds)} read from mixed_spots_R-1.pkl, the January "
+            f"2026 spot-detection output written before the round index was "
+            f"corrected upstream. It is that asset's own round, and it is the only "
+            f"spot table the asset holds; every other round here uses the later "
+            f"rewrite. On mice carrying both versions the rewrite changed R1 "
+            f"materially, so treat these rounds as a different processing vintage "
+            f"when comparing across animals.")
+
+
 def discover_rounds_from_processed(data_dir, mouse_id):
     """Rounds available from the PROCESSED assets alone, via processing_manifest.json.
 
@@ -204,24 +224,20 @@ def discover_rounds_from_processed(data_dir, mouse_id):
         rk = f"R{int(n)}"
         if (spots / f"mixed_spots_{rk}.pkl").exists():
             out[rk] = man.parent.name
+        elif (spots / "mixed_spots_R-1.pkl").exists():
+            # `-1` is not a round: upstream interpolated an uncorrected manifest
+            # value straight into the filename. Within an asset this file IS that
+            # asset's declared round, just the January 2026 vintage. Used only where
+            # the corrected rewrite is absent, and recorded wherever it is used.
+            out[rk] = man.parent.name
+            print(f"WARNING: {man.parent.name} declares round {int(n)} but has no "
+                  f"mixed_spots_{rk}.pkl; using its mixed_spots_R-1.pkl, the "
+                  f"superseded January 2026 output.", flush=True)
         else:
-            # The asset says it is this round but carries no spot table under that
-            # name. Say what IS there, because the one case seen in the wild is not
-            # an empty folder: every 7xxxxx asset also holds a mixed_spots_R-1.pkl
-            # written in Jan 2026 with a broken round index, superseded by a Feb/Mar
-            # rewrite under the correct name. Where both exist they are byte-for-byte
-            # the same size except at R1, where the rewrite changed the output by
-            # ~20% -- so the R-1 copy is an older result, not an alias, and must not
-            # be silently substituted. 782149 R1 has only the old copy.
             present = sorted(p.name for p in spots.glob("mixed_spots_*.pkl")) \
                 if spots.is_dir() else []
-            print(f"WARNING: {man.parent.name} declares round {int(n)} but has no "
-                  f"mixed_spots_{rk}.pkl"
-                  + (f"; it holds {', '.join(present)}. A 'R-1' file is a superseded "
-                     f"Jan-2026 output with a broken round index and is NOT used -- "
-                     f"this round needs reprocessing, or run --spots-from pairwise."
-                     if any("R-1" in p for p in present)
-                     else f"; folder holds {present or 'nothing'}."), flush=True)
+            print(f"WARNING: {man.parent.name} declares round {int(n)} but holds no "
+                  f"usable spot table; folder has {present or 'nothing'}.", flush=True)
     return sorted(out, key=lambda r: int(r[1:])), out
 
 
@@ -661,7 +677,8 @@ def main(argv=None):
             # actually read.
             spots_from=next(iter({s["family"] for s
                                   in (res.get("spot_tables") or {}).values()}),
-                            args.spots_from))
+                            args.spots_from),
+            extra_description=_superseded_note(res.get("spot_tables") or {}))
         used = man["input_assets"]
         print(f"\nasset manifest: {man['name']}")
         print(f"  inputs: {len(used['unmixing'])} unmixing, "

@@ -2251,27 +2251,75 @@ def test_two_reprocessings_of_one_round_is_an_error_not_a_coin_flip(tmp_path):
     assert "not interchangeable" in str(e.value)
 
 
-def test_a_superseded_R_minus_1_table_is_named_not_used(tmp_path, capsys):
-    """Every 7xxxxx processed asset also holds mixed_spots_R-1.pkl, a Jan-2026 output
-    written with a broken round index. Where both exist they are the same size except
-    at R1, where the later rewrite changed the output by ~20% -- so R-1 is an older
-    result, not an alias. 782149 R1 has ONLY the old copy, which is why that round is
-    unavailable rather than merely misnamed."""
+def test_a_superseded_R_minus_1_table_is_used_only_as_a_fallback(tmp_path, capsys):
+    """`-1` is not a round: upstream interpolated an uncorrected manifest value into
+    the output filename. Within an asset the R-1 file IS that asset's declared round,
+    January 2026 vintage. 782149 R1 has only that copy, so the choice is to read it
+    or to lose the round -- and Slc17a7 lives in R1, so losing it means no class call
+    for the mouse. It must never displace a correctly named file, and every use must
+    be recorded."""
     import run_capsule as rc
+    from aind_hcr_pairwise_unmixing_calibrated import spots_io
 
-    d = tmp_path / "HCR_782149_2025-11-05_13-00-00_processed_2025-11-10_20-37-29"
-    (d / "image_spot_spectral_unmixing").mkdir(parents=True)
-    (d / "image_spot_spectral_unmixing" / "mixed_spots_R-1.pkl").write_bytes(b"x")
-    (d / "processing_manifest.json").write_text(json.dumps({"round": 1}))
+    # R1: only the superseded file. R2: both, as every 7xxxxx R2 asset has.
+    only_old = tmp_path / "HCR_782149_2025-11-05_13-00-00_processed_2025-11-10_20-37-29"
+    (only_old / "image_spot_spectral_unmixing").mkdir(parents=True)
+    (only_old / "image_spot_spectral_unmixing" / "mixed_spots_R-1.pkl").write_bytes(b"x")
+    (only_old / "processing_manifest.json").write_text(json.dumps({"round": 1}))
 
-    ok = tmp_path / "HCR_782149_2025-11-12_13-00-00_processed_2025-11-13_22-04-32"
-    (ok / "image_spot_spectral_unmixing").mkdir(parents=True)
-    (ok / "image_spot_spectral_unmixing" / "mixed_spots_R2.pkl").write_bytes(b"x")
-    (ok / "image_spot_spectral_unmixing" / "mixed_spots_R-1.pkl").write_bytes(b"x")
-    (ok / "processing_manifest.json").write_text(json.dumps({"round": 2}))
+    both = tmp_path / "HCR_782149_2025-11-12_13-00-00_processed_2025-11-13_22-04-32"
+    (both / "image_spot_spectral_unmixing").mkdir(parents=True)
+    (both / "image_spot_spectral_unmixing" / "mixed_spots_R2.pkl").write_bytes(b"x")
+    (both / "image_spot_spectral_unmixing" / "mixed_spots_R-1.pkl").write_bytes(b"x")
+    (both / "processing_manifest.json").write_text(json.dumps({"round": 2}))
 
     rounds, _ = rc.discover_rounds_from_processed(tmp_path, "782149")
-    assert rounds == ["R2"]                      # R1 excluded, R2 unaffected by its R-1
-    msg = capsys.readouterr().out
-    assert "declares round 1" in msg and "mixed_spots_R-1.pkl" in msg
-    assert "superseded" in msg
+    assert rounds == ["R1", "R2"]
+    assert "superseded" in capsys.readouterr().out
+
+    # R1 falls back; R2 must take its correctly named file, not the R-1 beside it.
+    p1, _ = spots_io.find_spot_table("R1", "782149", tmp_path, source="processed")
+    p2, _ = spots_io.find_spot_table("R2", "782149", tmp_path, source="processed")
+    assert p1.name == "mixed_spots_R-1.pkl" and p1.parent.parent == only_old
+    assert p2.name == "mixed_spots_R2.pkl"
+
+
+def test_the_fallback_is_scoped_to_the_round_the_asset_declares(tmp_path):
+    """An R-1 file in an asset declaring round 3 is round 3 data, so it must not be
+    offered up for round 1."""
+    from aind_hcr_pairwise_unmixing_calibrated import spots_io
+
+    d = tmp_path / "HCR_782149_2025-11-19_13-00-00_processed_2025-11-21_01-27-24"
+    (d / "image_spot_spectral_unmixing").mkdir(parents=True)
+    (d / "image_spot_spectral_unmixing" / "mixed_spots_R-1.pkl").write_bytes(b"x")
+    (d / "processing_manifest.json").write_text(json.dumps({"round": 3}))
+
+    with pytest.raises(SystemExit):
+        spots_io.find_spot_table("R1", "782149", tmp_path, source="processed")
+    got, _ = spots_io.find_spot_table("R3", "782149", tmp_path, source="processed")
+    assert got.name == "mixed_spots_R-1.pkl"
+
+
+def test_superseded_rounds_reach_the_provenance():
+    """A round read from mixed_spots_R-1.pkl must be named in processing.json and in
+    the asset description. Silently substituting an older processing vintage is the
+    failure mode this whole path is guarding against."""
+    import run_capsule as rc
+    from aind_hcr_pairwise_unmixing_calibrated import metadata as MD
+
+    tables = {"R1": {"family": "processed", "superseded_round_index": True,
+                     "path": "/data/a/image_spot_spectral_unmixing/mixed_spots_R-1.pkl"},
+              "R2": {"family": "processed", "superseded_round_index": False,
+                     "path": "/data/b/image_spot_spectral_unmixing/mixed_spots_R2.pkl"}}
+
+    note = rc._superseded_note(tables)
+    assert "R1" in note and "R2" not in note and "R-1" in note
+    assert rc._superseded_note({"R2": tables["R2"]}) is None
+
+    dp = MD.unmixing_data_process(
+        input_locations=[v["path"] for v in tables.values()],
+        output_location="/results",
+        parameters={"rounds_from_superseded_spot_index": sorted(
+            r for r, v in tables.items() if v.get("superseded_round_index"))},
+        outputs={"cellxgene": "x.csv"}, notes="")
+    assert dp["parameters"]["rounds_from_superseded_spot_index"] == ["R1"]

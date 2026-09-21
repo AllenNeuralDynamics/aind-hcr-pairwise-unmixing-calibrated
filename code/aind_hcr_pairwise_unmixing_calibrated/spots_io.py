@@ -105,6 +105,8 @@ def _processed_spot_table(data_dir, mouse_id, round_key):
                 declared = None
         if declared is None or int(declared) == want:
             hits.append(cand)
+    if not hits:
+        hits = _superseded_round_index(data_dir, mouse_id, want)
     if len(hits) > 1:
         raise SystemExit(
             f"{round_key}: {len(hits)} processed assets for {mouse_id} carry this "
@@ -112,6 +114,44 @@ def _processed_spot_table(data_dir, mouse_id, round_key):
             + "\n  ".join(str(h.parent.parent.name) for h in hits)
             + "\nAttach exactly one per round.")
     return hits[0] if hits else None
+
+
+def _superseded_round_index(data_dir, mouse_id, want):
+    """`mixed_spots_R-1.pkl` in the asset that declares round `want`, if any.
+
+    `-1` is not a round. Upstream's `Config.ROUND_N` is read from the manifest, and
+    `process_round.py` interpolates it straight into the output names, so a January
+    2026 run whose manifest carried `round: -1` wrote `mixed_spots_R-1.pkl`,
+    `round_-1_summary_stats.csv` and `r-1_ratios.txt`. The manifests were corrected
+    afterwards and the outputs rewritten under the right names -- for every round of
+    every mouse except 782149 R1, which still has only the January file.
+
+    So within an asset, `R-1` is THAT asset's own round, not round one: the R2 asset's
+    R-1 is R2 data, byte-size identical to its `mixed_spots_R2.pkl`. Reading it is a
+    change of processing vintage, not of round. It is a real difference at R1, where
+    the rewrite altered the output (788406 6.23 -> 5.08 GB, 790322 6.81 -> 5.52 GB),
+    so the caller must record which rounds came from it.
+
+    The upstream loader (`aind-hcr-data-loader`, `get_spot_files`) globs
+    `mixed_spots_R{n}.pkl` specifically to skip these, calling them artefact files.
+    That is right for a mouse that has both. Where only the superseded file exists the
+    alternative is no round at all -- and the published pairwise result for 782149 R1
+    is itself derived from this file, there being no other source.
+    """
+    out = []
+    for cand in sorted(data_dir.glob(f"*{mouse_id}*/image_spot_spectral_unmixing/"
+                                     "mixed_spots_R-1.pkl")):
+        man = cand.parent.parent / "processing_manifest.json"
+        if not man.exists():
+            continue
+        try:
+            with open(man) as fh:
+                declared = json.load(fh).get("round")
+        except (OSError, ValueError):
+            continue
+        if declared is not None and int(declared) == want:
+            out.append(cand)
+    return out
 
 
 def find_spot_table(round_key, mouse_id, data_dir, source="auto", asset_dir=None):
@@ -167,6 +207,18 @@ def load_spot_table(round_key, mouse_id, data_dir, source="auto", asset_dir=None
     frame = pd.read_pickle(path)
     schema = describe_schema(frame)
     schema["path"], schema["asset"] = str(path), path.parent.name
+    # Named from the file, not from a flag, so the record cannot drift from the file
+    # that was actually opened. See _superseded_round_index.
+    schema["superseded_round_index"] = (family == "processed"
+                                        and path.name == "mixed_spots_R-1.pkl"
+                                        and round_key != "R-1")
+    if schema["superseded_round_index"]:
+        print(f"WARNING: {round_key} read from {path.parent.parent.name}/"
+              f"image_spot_spectral_unmixing/mixed_spots_R-1.pkl -- the January 2026 "
+              f"output, written before the round index was corrected, and the only "
+              f"spot table this asset has. Other rounds use the later rewrite, which "
+              f"at R1 changed the output materially on the mice that have both. "
+              f"Recorded in processing.json and in the asset description.", flush=True)
     if schema["missing_required"]:
         raise SystemExit(
             f"{path} is missing {schema['missing_required']}, which this pipeline "
