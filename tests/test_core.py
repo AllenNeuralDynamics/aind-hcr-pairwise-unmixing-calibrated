@@ -2141,3 +2141,56 @@ def test_processing_json_records_the_paths_actually_read():
     assert dp["input_location"] == [schemas["R1"]["path"]]
     assert "pairwise-unmixing" not in " ".join(dp["input_location"])
     assert dp["parameters"]["spots_from"] == ["processed"]
+
+
+def test_no_module_function_references_an_undefined_name():
+    """Static guard against the NameError class of bug.
+
+    `_write_asset_metadata` read `schemas`, a local of `run_mouse`, so the failure
+    surfaced only at the very end of a run -- after 27 minutes of unmixing and 16 GB
+    of spot tables had been written.
+
+    Walks LOAD_GLOBAL opcodes and RECURSES into nested code objects. Both matter: a
+    comprehension compiles to its own code object, which is where that bug actually
+    lived (the traceback pointed at <listcomp>), and inspect.getclosurevars does not
+    look inside one -- a first version of this guard used it and passed on the very
+    bug it was written for.
+    """
+    import builtins
+    import dis
+    import importlib
+    import inspect
+
+    from aind_hcr_pairwise_unmixing_calibrated import (annotate, core, fgbg, labeling,
+                                                       manifest, metadata, pipeline,
+                                                       plots, spots_io)
+    import run_capsule
+
+    pkg = importlib.import_module("aind_hcr_pairwise_unmixing_calibrated")
+
+    def global_loads(code, seen=None):
+        """Every LOAD_GLOBAL name in this code object and every nested one."""
+        seen = set() if seen is None else seen
+        for ins in dis.get_instructions(code):
+            if ins.opname == "LOAD_GLOBAL" and isinstance(ins.argval, str):
+                seen.add(ins.argval)
+        for const in code.co_consts:
+            if inspect.iscode(const):
+                global_loads(const, seen)
+        return seen
+
+    offenders = []
+    for mod in (annotate, core, fgbg, labeling, manifest, metadata, pipeline, plots,
+                spots_io, run_capsule):
+        for name, obj in vars(mod).items():
+            if not (inspect.isfunction(obj) and obj.__module__ == mod.__name__):
+                continue
+            src = inspect.getsource(obj)
+            for u in global_loads(obj.__code__):
+                if u in vars(mod) or u in vars(pkg) or hasattr(builtins, u):
+                    continue
+                if f"import {u}" in src:          # function-local import
+                    continue
+                offenders.append(f"{mod.__name__}.{name}: {u}")
+    assert not offenders, "functions read names that are not defined: " + "; ".join(
+        sorted(offenders))

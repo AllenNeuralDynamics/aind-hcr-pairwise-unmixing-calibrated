@@ -425,18 +425,24 @@ def _write_asset_metadata(asset_dir, mouse_id, rounds, outp, processed_root,
             break
     upstream = metadata.find_upstream_processing(source_dirs)
     summ = result["summary"]
+    # Per-round record of the spot table each round actually read, written by
+    # run_mouse. Read from `result` because that is what crosses into this function:
+    # the first version of this code referred to run_mouse's local `schemas`, which
+    # raised NameError only after 27 minutes of unmixing had already been paid for.
+    _spot_tables = result.get("spot_tables") or {}
     dp = metadata.unmixing_data_process(
         # The spot table each round ACTUALLY read, recorded during the run. The old
         # form built these paths from asset_dir, which is the pairwise asset -- so a
         # --spots-from processed run wrote a processing.json naming inputs it never
         # opened. processing.json is the machine-readable provenance that travels
         # inside the registered asset, so that is a false record, not a cosmetic one.
-        input_locations=[schemas[r]["path"] if r in schemas
+        input_locations=[_spot_tables[r]["path"] if r in _spot_tables
                          else str(Path(asset_dir) / f"{mouse_id}_{r}") for r in rounds],
         output_location=str(outp),
         parameters={"rounds": list(rounds), "mouse_id": mouse_id,
                     "processed_folder": processed_folder,
-                    "spots_from": sorted({s["family"] for s in schemas.values()}) or None,
+                    "spots_from": sorted({v["family"]
+                                          for v in _spot_tables.values()}) or None,
                     **_jsonable(params)},
         # Only claim files that were actually written: processing.json is the record of
         # what this asset contains, and naming absent spot tables would make it wrong.
