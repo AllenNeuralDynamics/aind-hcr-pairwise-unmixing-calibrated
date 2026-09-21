@@ -2057,3 +2057,42 @@ def test_app_panel_declares_every_parameter_the_api_needs():
     declared = {p["param_name"] for p in panel["parameters"]}
     assert {"mouse-id", "spots-from", "skip", "rounds"} <= declared
     assert panel.get("named_parameters") is True
+
+
+def test_unfitted_entries_are_nan_not_zero(tmp_path):
+    """Only X and layers['normalized'] cover every cell. The class-scoped matrices
+    have nothing to say about a cell with no class, and a zero row would say the
+    wrong thing: read at face value it reports a measured absence."""
+    import numpy as _np
+    from aind_hcr_pairwise_unmixing_calibrated import annotate as A
+
+    rng = _np.random.default_rng(4)
+    genes = ["Gad2", "Slc17a7", "Pvalb", "Sst", "Vip", "Lamp5", "Npy", "Ndnf",
+             "Cck", "Crh", "Calb2", "Tac1", "Reln", "Pthlh", "Hpse", "Mme", "Chat"]
+    cols = [f"R{1 + i // 4}-{[488, 514, 561, 594][i % 4]}-{g}" for i, g in enumerate(genes)]
+    n = 1200
+    X = rng.negative_binomial(3, 0.2, size=(n, len(genes))).astype(float)
+    inh = _np.arange(n) < 300
+    X[inh, genes.index("Gad2")] += rng.poisson(300, inh.sum())
+    X[~inh, genes.index("Slc17a7")] += rng.poisson(400, (~inh).sum())
+    X[-40:] = 0                                   # forced low_counts: no class at all
+    t = pd.DataFrame(X, columns=cols, index=[f"c{i:05d}" for i in range(n)])
+
+    ad = A.build_anndata(t, n_inh=4, n_exc=3)
+    classed = ad.obs["class"].isin(["inhibitory", "excitatory"]).to_numpy()
+    assert (~classed).sum() > 0, "fixture must contain cells of no class"
+
+    xc = _np.asarray(ad.obsm["X_cluster"])
+    wc = _np.asarray(ad.layers["normalized_within_class"])
+    assert _np.isnan(xc[~classed]).all(), "unfitted cells must be NaN in X_cluster"
+    assert _np.isnan(wc[~classed]).all(), "unfitted cells must be NaN within-class"
+
+    # ...and the matrices that DO cover every cell must stay finite everywhere.
+    assert _np.isfinite(_np.asarray(ad.X)).all()
+    assert _np.isfinite(_np.asarray(ad.layers["normalized"])).all()
+
+    # A classed cell keeps real values in its own clustering genes.
+    inh_rows = (ad.obs["class"] == "inhibitory").to_numpy()
+    inh_genes = [i for i, v in enumerate(ad.var_names)
+                 if A.gene_name(v) in A.HCR_PANEL_15]
+    assert _np.isfinite(xc[_np.ix_(inh_rows, inh_genes)]).any()

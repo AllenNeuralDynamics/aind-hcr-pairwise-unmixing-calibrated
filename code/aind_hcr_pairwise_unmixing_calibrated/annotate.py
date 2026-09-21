@@ -24,10 +24,18 @@ WHAT IS STORED WHERE
                          divided by its 95th percentile, then each cell divided by its
                          own total and rescaled to the median total. This is the
                          display matrix.
-    obsm["X_cluster"]    the matrix each cell was actually clustered on, padded to the
-                         full gene set with zeros where a gene was not in that class's
-                         clustering space. Inhibitory cells are clustered on the
-                         fifteen protocol genes, excitatory on the rest of the panel.
+    obsm["X_cluster"]    the matrix each cell was actually clustered on, widened to
+                         the full gene set with NaN wherever nothing was fitted -- a
+                         gene outside that class's clustering space, a cell of no
+                         class, a cell dropped as all-zero. Inhibitory cells are
+                         clustered on the fifteen protocol genes, excitatory on the
+                         rest of the panel.
+
+    Only X and layers["normalized"] cover every cell. The two class-scoped matrices
+    are defined per class and are NaN for a cell that has none, because there is no
+    class whose percentiles could scale it. NaN rather than 0 because a zero row is a
+    measurement -- read at face value it says the cell expressed nothing, when what is
+    true is that the matrix has nothing to say about that cell.
     obs                  class, subclass, cluster, cluster_id, the mixture posterior
                          the class call came from, the marker counts it was computed
                          on, and total_counts / n_genes.
@@ -361,7 +369,14 @@ def cluster_by_class(table, classes, subclass, n_inh=N_CLUSTERS_INH,
     index = table.index
     labels = pd.Series(["unassigned"] * len(index), index=index, dtype=object)
     cluster_id = pd.Series([-1] * len(index), index=index, dtype=int)
-    cluster_matrix = pd.DataFrame(0.0, index=index, columns=table.columns)
+    # NaN, not zero: this matrix records what k-means actually saw, so every entry
+    # that was not part of a fit -- a cell of no class, a cell dropped as all-zero,
+    # a gene outside that class's clustering space -- has no value rather than a
+    # value of nothing. Zero here is indistinguishable from a measured zero, and the
+    # two mean opposite things. To place an unfitted cell in the fitted space, reuse
+    # the fitted percentiles and median (`_project_2b` in the cohort protocol);
+    # recomputing the transform on it would move the space it is being placed in.
+    cluster_matrix = pd.DataFrame(np.nan, index=index, columns=table.columns)
     info, offset = {}, 0
 
     for klass, k in (("inhibitory", n_inh), ("excitatory", n_exc)):
@@ -445,9 +460,13 @@ def within_class_transform(table, classes):
     matrix to about one percent (Cck 0.557 against 0.551 on the promoted cluster), so
     a name above the 0.5 floor is a mark you can see.
 
-    Cells in neither class stay zero -- there is no class to normalise them within.
+    Cells in neither class -- low_counts, ambiguous, unassigned -- are NaN, not zero.
+    There is no class to normalise them within, and zero is a measurement: a reader
+    who takes a zero row at face value concludes the cell expressed nothing, when the
+    truth is that this matrix has nothing to say about it. Their counts are in `X` and
+    their whole-table transform is in `layers["normalized"]`, which covers every cell.
     """
-    out = pd.DataFrame(0.0, index=table.index, columns=table.columns)
+    out = pd.DataFrame(np.nan, index=table.index, columns=table.columns)
     classes = classes.reindex(table.index)
     for klass in ("inhibitory", "excitatory"):
         sel = table.index[classes.to_numpy() == klass]
@@ -523,8 +542,11 @@ def build_anndata(table, min_class_counts=MIN_CLASS_COUNTS, n_inh=N_CLUSTERS_INH
               "over every cell at once; layers['normalized_within_class'] is the same "
               "transform computed within each class and is what the cluster figures "
               "display and what cluster names are comparable to; obsm['X_cluster'] is "
-              "what k-means actually saw, zero-padded outside each class's clustering "
-              "genes. Clusters are PER MOUSE and do not correspond across animals -- "
+              "what k-means actually saw. The two class-scoped matrices are NaN "
+              "wherever nothing was fitted -- cells of no class in both, and genes "
+              "outside a class's clustering space in X_cluster. Only layers"
+              "['normalized'] covers every cell. Clusters are PER MOUSE and do not "
+              "correspond across animals -- "
               "use the consensus clusters for any across-mouse analysis."),
     )
     if extra_uns:

@@ -630,7 +630,9 @@ no class to normalise them within.
 
 **`adata.obsm["X_cluster"]`** — the matrix k-means actually saw. The transform is
 recomputed on each class's own cells and its own gene space, so this is not a slice of
-`layers["normalized"]`; genes outside a cell's clustering space are zero-padded. k-means
+`layers["normalized"]`; entries that were not part of a fit — a gene outside a cell's
+clustering space, a cell of no class, a cell dropped as all-zero — are **NaN**, not 0,
+since a zero row reads as a measured absence. k-means
 runs on it **directly** — no z-scoring, since the p95 stage already puts every gene on a
 common scale and re-inflating each to unit variance would give a gene detected in a
 handful of cells the same weight as one carrying real structure.
@@ -1026,7 +1028,7 @@ Alongside the spot tables, the capsule writes `<mouse>_cellxgene_annotated.h5ad`
 | `X` | **raw** transcript counts, all cells × all genes |
 | `layers["normalized"]` | the p95 transform over all cells and genes: each gene ÷ its 95th percentile, then each cell ÷ its own total × the median total |
 | `layers["normalized_within_class"]` | the same transform computed within each class — what the single-class figures show, and what cluster names are comparable to |
-| `obsm["X_cluster"]` | the matrix k-means actually saw, transformed per class on that class's own cells and genes, zero-padded elsewhere |
+| `obsm["X_cluster"]` | the matrix k-means actually saw, transformed per class on that class's own cells and genes; NaN wherever nothing was fitted |
 | `obs` | `class`, `subclass`, `cluster`, `cluster_id`, `p_inhibitory`, marker counts, `total_counts`, `n_genes` |
 | `var` | `round`, `channel`, `gene` per column |
 | `uns["unmixing"]` | every parameter the labels were computed with |
