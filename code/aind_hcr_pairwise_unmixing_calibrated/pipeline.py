@@ -80,7 +80,13 @@ def run_round(spots, powers, gene_map, round_key, B_ctrl=None,
         # the join reconstructs by matching coordinates against a separate stats file,
         # while these columns are the values the intensity was computed FROM.
         fg_bg = native
-        print(f"  fg/bg: native columns on the spot table ({len(channels)} channels); "
+        # Count the columns actually found, not len(channels): the caller's channel
+        # list is the full acquisition set, so a 2-channel round (R1 here) was
+        # reporting 5. The values themselves were always taken from the table's own
+        # columns, so only the log line was wrong -- but a log line that misstates
+        # how many channels were read is exactly what nobody re-checks.
+        print(f"  fg/bg: native columns on the spot table "
+              f"({len(spots_io.channel_columns(spots, 'fg'))} channels); "
               f"join skipped", flush=True)
     elif diag_paths:
         fg, bg = attach_fg_bg(spots, diag_paths, channels)

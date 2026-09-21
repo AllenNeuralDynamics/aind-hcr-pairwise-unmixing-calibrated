@@ -155,9 +155,16 @@ def check_cells(wanted, pw, pr, genes):
 def load_cell_list(path, column=None):
     """Cell ids from a one-per-line list, or from a named or guessed column of a CSV."""
     p = Path(path)
-    txt = p.read_text().splitlines()
+    txt = [s.strip() for s in p.read_text().splitlines() if s.strip()]
+    known = ("cell_id", "hcr_id", "roi_id", "cell", "id")
     if column is None and len(txt) > 1 and "," not in txt[0]:
-        return [s.strip() for s in txt if s.strip()]
+        # A one-column CSV has no comma on its header line either, so a bare
+        # split-on-newline swallows the header as a cell id. It then lands in "in
+        # neither arm" and reads as one genuinely missing cell -- which is how this
+        # was found: 294 requested from a 293-row file.
+        if txt[0].lower() in known:
+            txt = txt[1:]
+        return txt
     t = pd.read_csv(p)
     if column is not None:
         return t[column].astype(str).tolist()

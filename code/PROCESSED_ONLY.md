@@ -159,6 +159,53 @@ annotate-don't-filter trade this capsule makes everywhere else — the rows are 
 for what they are and a downstream consumer can drop them, rather than being removed
 here by a rule nobody downstream can see.
 
+## Six-round validation on 800792 (v0.6.1, both arms)
+
+Both arms run over all six rounds as Reproducible Runs. Every one of the twelve spot
+row counts matched the value predicted from the pickle headers, and arm A reproduced
+the shipped table's cell count (115,095), so the comparison isolates the spot source.
+
+|  | pairwise | processed | delta |
+|---|---|---|---|
+| cells out | 115,095 | 140,554 | +25,459 (+22.1%) |
+| inhibitory | 10,897 | 11,562 | +665 |
+| excitatory | 88,078 | 94,278 | +6,200 |
+| ambiguous | 1,908 | 2,946 | +1,038 |
+| low_counts | 14,212 | 31,768 | +17,556 |
+
+The 25,459 recovered cells split 17,557 `low_counts` / 6,177 excitatory / 1,029
+inhibitory / 696 ambiguous. **31% of them clear the 100-count floor** and therefore
+receive labels — far more than the single-round figure suggested (R2 alone put 97.6%
+below the floor; over 27 gene-rounds it is 69%). Median total counts 34 against 1,197
+for shared cells.
+
+**Counts on shared cells do not move.** Per-gene totals change by −0.144% to +0.040%,
+the largest change on any single cell is 18 counts, and R1's two genes are identical to
+the last count.
+
+**Subclass is untouched: agreement 1.0000** on the 10,532 cells inhibitory in both arms.
+
+**Class moves for 389 of 115,095 shared cells (0.34%), and the mechanism is fully
+accounted for.** The class call is a mixture fitted to whatever cells clear the floor,
+so a wider population moves the gates. The upper gate went from **−1.033 to −0.832** in
+log2((Gad2+1)/(Slc17a7+1)) — stricter — while the lower gate barely moved (−2.204 to
+−2.190). Every one of the 364 `inhibitory -> ambiguous` cells has a log-ratio inside
+that swept band (min −1.032, max −0.832): no cell changed class for any other reason.
+The remaining flips are 23 `ambiguous -> excitatory` and 3 singletons.
+
+Net, the inhibitory population grows: 1,029 recovered cells join, 364 marginal ones
+become ambiguous, +665 overall.
+
+Of the 293 coregistered cells on this mouse, all 293 are present in both arms and
+**2 change class**.
+
+### What this does not settle
+
+The gate shift is a real coupling: the label a cell receives depends on which other
+cells were in the table. It is inherent to a mixture-based class call, not to this
+change, but the switch makes it visible. Anyone comparing labels across pipeline
+versions has to know the boundary moved.
+
 ## Decision: keep the recovered cells (2026-09-20)
 
 The ROI-rejected cells stay in the table, labelled for what they are, and a downstream
