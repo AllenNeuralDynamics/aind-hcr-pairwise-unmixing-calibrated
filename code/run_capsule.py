@@ -522,21 +522,35 @@ def main(argv=None):
     # With --spots-from processed the pairwise asset is not an input at all, so its
     # absence must not be an error -- otherwise the flag still requires the mount it
     # exists to remove. Rounds then come from the processed assets' own manifests.
-    if args.spots_from == "processed":
-        asset = find_asset(args.mouse_id, data_dir, required=False)
-        proc_rounds, proc_where = discover_rounds_from_processed(data_dir, args.mouse_id)
-        if not proc_rounds:
-            raise SystemExit(
-                f"--spots-from processed: no processed asset under {data_dir} carries "
-                f"image_spot_spectral_unmixing/mixed_spots_<R>.pkl for {args.mouse_id}.")
-        rounds = args.rounds or proc_rounds
-        print(f"spots   : processed assets ({len(proc_rounds)} rounds: "
-              f"{', '.join(proc_rounds)})")
-        if asset is None:
-            print("note    : no pairwise-unmixing asset attached; not needed for this run")
-    else:
+    if args.spots_from == "pairwise":
         asset = find_asset(args.mouse_id, data_dir)
         rounds = args.rounds or discover_rounds(asset, args.mouse_id)
+    else:
+        # `auto` means PREFER pairwise when attached, not require it. It used to take
+        # the same path as `pairwise` and so died with "no pairwise-unmixing asset" on
+        # a mouse whose processed assets were complete -- which reads as a missing
+        # input rather than as a default that never learned the capsule no longer
+        # needs that asset. `spots_io.find_spot_table` has always degraded correctly;
+        # only this resolution step did not.
+        asset = find_asset(args.mouse_id, data_dir, required=False)
+        if args.spots_from == "auto" and asset is not None:
+            rounds = args.rounds or discover_rounds(asset, args.mouse_id)
+        else:
+            proc_rounds, proc_where = discover_rounds_from_processed(
+                data_dir, args.mouse_id)
+            if not proc_rounds:
+                raise SystemExit(
+                    f"--spots-from {args.spots_from}: no processed asset under "
+                    f"{data_dir} carries image_spot_spectral_unmixing/"
+                    f"mixed_spots_<R>.pkl for {args.mouse_id}"
+                    + ("" if asset is not None else
+                       ", and no pairwise-unmixing asset is attached either."))
+            rounds = args.rounds or proc_rounds
+            print(f"spots   : processed assets ({len(proc_rounds)} rounds: "
+                  f"{', '.join(proc_rounds)})")
+            if asset is None:
+                print("note    : no pairwise-unmixing asset attached; not needed for "
+                      "this run")
 
     # R1 carries Slc17a7, the only excitatory marker in the panel, and R4 carries
     # Gad2. Without both, build_anndata cannot assign a class and every cell comes

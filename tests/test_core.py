@@ -1491,7 +1491,7 @@ def _run_mouse_kwargs_from_argv(argv):
         pass
 
     rc.pipeline.run_mouse = fake_run_mouse
-    rc.find_asset = lambda mouse_id, data_dir: _P("/tmp/asset")
+    rc.find_asset = lambda mouse_id, data_dir, **kw: _P("/tmp/asset")
     rc.discover_rounds = lambda asset, mouse_id: ["R1", "R4"]
     rc.gene_map_for_round = lambda asset, mouse_id, r, **kw: {"488": "GFP"}
     rc.pipeline.round_inputs_from_asset = lambda *a, **k: (None, None)
@@ -2443,3 +2443,55 @@ def test_782149_shaped_run_end_to_end(tmp_path):
 
     man = _json.loads((out / "asset_manifest.json").read_text())
     assert "NOTE:" in man["description"] and "594" in man["description"]
+
+
+def test_auto_runs_without_a_pairwise_asset(tmp_path):
+    """`auto` prefers the pairwise table when attached; it must not require it.
+
+    Real failure: 790322 was run with the App Panel's spots-from field left blank,
+    which resolves to `auto`, and died with "no pairwise-unmixing asset" although its
+    five processed assets were complete. The error named a missing input, so the
+    obvious reading was to attach the pairwise asset -- the exact dependency this
+    branch exists to remove."""
+    import json as _json
+    import subprocess as _sp
+    import sys as _sys
+    import os as _os
+    import numpy as _np
+
+    rng = _np.random.default_rng(1)
+    for rnd, chans, genes in ((1, ["488", "561"], {"488": "GFP", "561": "Slc17a7"}),
+                              (4, ["488", "638"], {"488": "Lamp5", "638": "Gad2"})):
+        d = tmp_path / f"HCR_790322_2025-11-0{rnd}_13-00-00_processed_2025-11-1{rnd}"
+        (d / "image_spot_spectral_unmixing").mkdir(parents=True)
+        n = 2000
+        ch = rng.choice(chans, n)
+        df = pd.DataFrame({"spot_id": [f"{c}_{i}" for i, c in enumerate(ch)],
+                           "chan": ch, "chan_spot_id": _np.arange(n),
+                           "cell_id": rng.integers(1, 200, n), "round": rnd,
+                           "z": rng.random(n) * 50, "y": rng.random(n) * 900,
+                           "x": rng.random(n) * 900, "dist": rng.random(n),
+                           "r": rng.random(n)})
+        for c in chans:
+            df[f"chan_{c}_fg"] = rng.random(n) + 1.0
+            df[f"chan_{c}_bg"] = rng.random(n) * 0.1
+            df[f"chan_{c}_intensity"] = df[f"chan_{c}_fg"] - df[f"chan_{c}_bg"]
+        df.to_pickle(d / "image_spot_spectral_unmixing" / f"mixed_spots_R{rnd}.pkl")
+        (d / "processing_manifest.json").write_text(_json.dumps(
+            {"round": rnd, "gene_dict": {c: {"gene": g} for c, g in genes.items()}}))
+        (d / "acquisition.json").write_text(_json.dumps({"data_streams": [
+            {"light_sources": [{"name": f"laser {c}", "wavelength": int(c),
+                                "excitation_power": 10.0} for c in chans]}]}))
+
+    code = Path(__file__).parent.parent / "code"
+    out = tmp_path / "results"
+    # No spots-from at all: exactly what a blank App Panel field produces.
+    r = _sp.run([_sys.executable, "run_capsule.py", "--mouse-id", "790322",
+                 "--data-dir", str(tmp_path), "--output-dir", str(out),
+                 "--skip", "spots,plots,anndata,metadata"],
+                cwd=code, capture_output=True, text=True,
+                env={**_os.environ, "PYTHONPATH": "."})
+    assert r.returncode == 0, (r.stdout[-1500:], r.stderr[-1500:])
+    assert "no pairwise-unmixing asset attached; not needed" in r.stdout
+    cxg = pd.read_csv(out / "790322_cellxgene.csv", index_col=0)
+    assert {"R1-561-Slc17a7", "R4-638-Gad2"} <= set(cxg.columns)
