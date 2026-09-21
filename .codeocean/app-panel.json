@@ -17,6 +17,30 @@
 			"type": "text",
 			"value_type": "string",
 			"required": false
+		},
+		{
+			"id": "spotsFromParam0001",
+			"name": "--spots-from",
+			"param_name": "spots-from",
+			"type": "text",
+			"value_type": "string",
+			"required": false
+		},
+		{
+			"id": "skipParam000000001",
+			"name": "--skip",
+			"param_name": "skip",
+			"type": "text",
+			"value_type": "string",
+			"required": false
+		},
+		{
+			"id": "roundsParam0000001",
+			"name": "--rounds",
+			"param_name": "rounds",
+			"type": "text",
+			"value_type": "string",
+			"required": false
 		}
 	]
 }

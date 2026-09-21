@@ -50,6 +50,7 @@ symbol, and processing_manifest.json was never opened.)
 """
 import argparse
 import json
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -123,6 +124,61 @@ def find_asset(mouse_id, data_dir=DATA_DIR, required=True):
     if len(hits) > 1:
         print(f"WARNING: {len(hits)} candidate assets, using {hits[0].name}")
     return hits[0]
+
+
+#: --skip token -> the argparse attribute it sets.
+SKIP_TOKENS = {"spots": "no_spots", "anndata": "no_anndata", "plots": "no_plots",
+               "metadata": "no_metadata", "fgbg": "no_fgbg"}
+
+SPOTS_FROM_CHOICES = ("auto", "pairwise", "processed")
+
+
+def normalize_app_panel_args(args):
+    """Repair the argv shapes Code Ocean's App Panel produces. Mutates `args`.
+
+    A text parameter is emitted as `--name=value`, always, with the value empty when
+    the field is left blank. Three consequences, all of which turn a run into a crash
+    or a silently wrong result if unhandled:
+
+      blank fields     `--spots-from=` reaches argparse as the empty string. Treated
+                       here as "not set", not as an invalid choice.
+      no flags         a store_true option cannot be expressed at all, which is what
+                       `--skip spots,anndata` exists to work around.
+      one value only   `--rounds=R2 R4` arrives as ONE element "R2 R4" rather than
+                       two, because the shell never splits inside the parameter.
+
+    None of this applies when the script is run from a terminal, where the flags
+    behave normally; this function is a no-op on that path.
+    """
+    spots = (getattr(args, "spots_from", None) or "").strip()
+    args.spots_from = spots or "auto"
+    if args.spots_from not in SPOTS_FROM_CHOICES:
+        raise SystemExit(
+            f"--spots-from: {args.spots_from!r} is not one of "
+            f"{', '.join(SPOTS_FROM_CHOICES)}")
+
+    skip = (getattr(args, "skip", None) or "").strip()
+    if skip:
+        unknown = []
+        for tok in (t.strip().lower() for t in re.split(r"[,\s]+", skip) if t.strip()):
+            attr = SKIP_TOKENS.get(tok.removeprefix("no-").removeprefix("no_"))
+            if attr is None:
+                unknown.append(tok)
+            else:
+                setattr(args, attr, True)
+        if unknown:
+            raise SystemExit(
+                f"--skip: unknown {', '.join(unknown)}. Known tokens: "
+                f"{', '.join(sorted(SKIP_TOKENS))}")
+
+    rounds = getattr(args, "rounds", None)
+    if rounds:
+        flat = []
+        for r in rounds:
+            flat += [t for t in re.split(r"[,\s]+", str(r).strip()) if t]
+        args.rounds = flat or None
+    elif rounds is not None:
+        args.rounds = None
 
 
 def discover_rounds_from_processed(data_dir, mouse_id):
@@ -394,7 +450,11 @@ def main(argv=None):
     ap.add_argument("--processed-root", default=None,
                     help="parent dir of processed assets; default = --data-dir")
     ap.add_argument("--spots-from", default="auto",
-                    choices=("auto", "pairwise", "processed"),
+                    # No argparse `choices`: Code Ocean's App Panel emits a text
+                    # parameter as --spots-from=<value> even when the field is left
+                    # blank, and `choices` would reject the empty string before the
+                    # run starts. Validated in normalize_app_panel_args instead, where
+                    # blank can mean "unset".
                     help="which mixed_spots_<R>.pkl to read. 'pairwise' is the "
                          "HCR_<mouse>_pairwise-unmixing asset, the spot set every "
                          "result so far was produced from. 'processed' is the copy in "
@@ -402,6 +462,12 @@ def main(argv=None):
                          "chan_<ch>_fg / _bg so the fg/bg join is skipped -- but it "
                          "holds 2-4%% more spots, so it does NOT reproduce the same "
                          "cell x gene table. 'auto' prefers pairwise when attached.")
+    ap.add_argument("--skip", default=None, metavar="LIST",
+                    help="comma-separated outputs to skip: spots, anndata, plots, "
+                         "metadata, fgbg. Equivalent to the --no-* flags, in one text "
+                         "field so a Reproducible Run can set them from the App Panel "
+                         "(a store_true flag cannot be expressed as an App Panel "
+                         "parameter, which emits --name=value).")
     ap.add_argument("--relabel-from", default=None, metavar="PATH",
                     help="skip the unmixing entirely and rebuild ONLY the labels from "
                          "an existing <mouse>_cellxgene.csv. PATH is that file or the "
@@ -411,6 +477,7 @@ def main(argv=None):
                          "here re-derives spot decisions, so the cell x gene counts are "
                          "exactly the ones the unmixing produced.")
     args = ap.parse_args(argv)
+    normalize_app_panel_args(args)
 
     if args.relabel_from:
         return relabel(args)

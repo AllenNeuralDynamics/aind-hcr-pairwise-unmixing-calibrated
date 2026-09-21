@@ -1979,3 +1979,81 @@ def test_a_class_call_survives_the_misspelling():
     assert renames == [("R1-561-Slac17a7", "R1-561-Slc17a7")]
     assert info["markers_available"]["excitatory"] == "R1-561-Slc17a7"
     assert info["n_inhibitory"] > 100 and info["n_excitatory"] > 200
+
+
+# ------------------------------------------------- Code Ocean App Panel arguments
+#
+# A text parameter is emitted as --name=value, always, blank field included. That
+# breaks argparse choices, cannot express a store_true flag, and never splits a
+# multi-value field. Verified against a real run: the probe passed spots-from as a
+# named parameter and the log showed `run_capsule.py --mouse-id=NOTAMOUSE` -- Code
+# Ocean drops any parameter not declared in .codeocean/app-panel.json.
+
+def _panel_ns(**kw):
+    import argparse as _ap
+    ns = _ap.Namespace(spots_from="auto", skip=None, rounds=None, no_spots=False,
+                       no_anndata=False, no_plots=False, no_metadata=False,
+                       no_fgbg=False)
+    for k, v in kw.items():
+        setattr(ns, k, v)
+    return ns
+
+
+def test_blank_app_panel_fields_mean_unset_not_invalid():
+    import run_capsule
+
+    ns = _panel_ns(spots_from="", skip="", rounds=[])
+    run_capsule.normalize_app_panel_args(ns)
+    assert ns.spots_from == "auto" and ns.rounds is None and ns.no_spots is False
+
+
+def test_skip_list_sets_the_store_true_flags():
+    import run_capsule
+
+    ns = _panel_ns(skip="spots,anndata plots,metadata")
+    run_capsule.normalize_app_panel_args(ns)
+    assert (ns.no_spots, ns.no_anndata, ns.no_plots, ns.no_metadata) == (True,) * 4
+    assert ns.no_fgbg is False          # not named, so not set
+
+
+def test_rounds_arrive_as_one_string_and_are_split():
+    import run_capsule
+
+    ns = _panel_ns(rounds=["R2 R4"])
+    run_capsule.normalize_app_panel_args(ns)
+    assert ns.rounds == ["R2", "R4"]
+    ns = _panel_ns(rounds=["R2", "R4"])      # terminal form must be untouched
+    run_capsule.normalize_app_panel_args(ns)
+    assert ns.rounds == ["R2", "R4"]
+
+
+def test_bad_panel_values_fail_before_the_run_starts():
+    import run_capsule
+
+    with pytest.raises(SystemExit, match="spots-from"):
+        run_capsule.normalize_app_panel_args(_panel_ns(spots_from="BOGUS"))
+    with pytest.raises(SystemExit, match="skip"):
+        run_capsule.normalize_app_panel_args(_panel_ns(skip="nonsense"))
+
+
+def test_every_skip_token_maps_to_a_real_flag():
+    """A token naming an attribute that does not exist would silently skip nothing."""
+    import run_capsule
+
+    for tok, attr in run_capsule.SKIP_TOKENS.items():
+        ns = _panel_ns(skip=tok)
+        run_capsule.normalize_app_panel_args(ns)
+        assert getattr(ns, attr) is True, tok
+
+
+def test_app_panel_declares_every_parameter_the_api_needs():
+    """Code Ocean drops undeclared parameters silently, so the panel and the parser
+    have to agree or a triggered run quietly uses defaults."""
+    import json as _json
+    import pathlib as _pl
+
+    panel = _json.loads((_pl.Path(__file__).parent.parent
+                         / ".codeocean" / "app-panel.json").read_text())
+    declared = {p["param_name"] for p in panel["parameters"]}
+    assert {"mouse-id", "spots-from", "skip", "rounds"} <= declared
+    assert panel.get("named_parameters") is True
