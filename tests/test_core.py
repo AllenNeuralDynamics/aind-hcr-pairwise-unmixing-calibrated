@@ -2313,7 +2313,10 @@ def test_superseded_rounds_reach_the_provenance():
                      "path": "/data/b/image_spot_spectral_unmixing/mixed_spots_R2.pkl"}}
 
     note = rc._superseded_note(tables)
-    assert "R1" in note and "R2" not in note and "R-1" in note
+    assert "R1" in note and "R-1" in note
+    assert "R2-R5" in note          # the only other R appears as a range
+    assert "gene_dict" in note      # names are unaffected; say so
+    assert "594" in note            # and the one real difference at R1
     assert rc._superseded_note({"R2": tables["R2"]}) is None
 
     dp = MD.unmixing_data_process(
@@ -2366,3 +2369,77 @@ def test_unmixing_is_restricted_to_the_rounds_mapped_channels():
     assert labels <= {"R1-488-GFP", "R1-561-Slc17a7"}
     assert not any("594" in l for l in labels)
     assert (out["spots"]["chan"].astype(str).isin(mapped)).all()
+
+
+def test_782149_shaped_run_end_to_end(tmp_path):
+    """The whole path on 782149's real shape: R1 with only a January mixed_spots_R-1
+    holding an extra 594 channel, R2 with both files and five channels.
+
+    Unit tests covered each piece; this is the one that would have caught them being
+    wired together wrongly. Asserts what a reader of the registered asset sees --
+    real gene names, R1 present, 594 absent, and the substitution on the record."""
+    import json as _json
+    import subprocess as _sp
+    import sys as _sys
+    import os as _os
+    import numpy as _np
+
+    rng = _np.random.default_rng(5)
+
+    def mk(acq, reproc, rnd, chans, genes, fname, n=4000):
+        d = tmp_path / f"HCR_782149_{acq}_processed_{reproc}"
+        (d / "image_spot_spectral_unmixing").mkdir(parents=True)
+        ch = rng.choice(chans, n)
+        df = pd.DataFrame({"spot_id": [f"{c}_{i}" for i, c in enumerate(ch)],
+                           "chan": ch, "chan_spot_id": _np.arange(n),
+                           "cell_id": rng.integers(1, 300, n), "round": rnd,
+                           "z": rng.random(n) * 50, "y": rng.random(n) * 900,
+                           "x": rng.random(n) * 900, "dist": rng.random(n),
+                           "r": rng.random(n)})
+        for c in chans:
+            df[f"chan_{c}_fg"] = rng.random(n) + 1.0
+            df[f"chan_{c}_bg"] = rng.random(n) * 0.1
+            df[f"chan_{c}_intensity"] = df[f"chan_{c}_fg"] - df[f"chan_{c}_bg"]
+        df.to_pickle(d / "image_spot_spectral_unmixing" / fname)
+        (d / "processing_manifest.json").write_text(_json.dumps(
+            {"round": rnd, "gene_dict": {c: {"gene": g} for c, g in genes.items()}}))
+        (d / "acquisition.json").write_text(_json.dumps({"data_streams": [
+            {"light_sources": [{"name": f"laser {c}", "wavelength": int(c),
+                                "excitation_power": 10.0} for c in chans]}]}))
+        return d
+
+    mk("2025-11-05_13-00-00", "2025-11-10_20-37-29", 1, ["488", "561", "594"],
+       {"488": "GFP", "561": "Slc17a7"}, "mixed_spots_R-1.pkl")
+    d2 = mk("2025-11-12_13-00-00", "2025-11-13_22-04-32", 2,
+            ["488", "514", "561", "594", "638"],
+            {"488": "Ndnf", "514": "Hpse", "561": "Pthlh", "594": "Chat",
+             "638": "Tac1"}, "mixed_spots_R2.pkl")
+    import shutil as _sh
+    _sh.copy(d2 / "image_spot_spectral_unmixing" / "mixed_spots_R2.pkl",
+             d2 / "image_spot_spectral_unmixing" / "mixed_spots_R-1.pkl")
+
+    code = Path(__file__).parent.parent / "code"
+    out = tmp_path / "results"
+    r = _sp.run([_sys.executable, "run_capsule.py", "--mouse-id", "782149",
+                 "--spots-from", "processed", "--data-dir", str(tmp_path),
+                 "--output-dir", str(out), "--skip", "spots,plots"],
+                cwd=code, capture_output=True, text=True,
+                env={**_os.environ, "PYTHONPATH": "."})
+    assert r.returncode == 0, r.stderr[-2000:]
+
+    cxg = pd.read_csv(out / "782149_cellxgene.csv", index_col=0)
+    assert list(cxg.columns) == ["R1-488-GFP", "R1-561-Slc17a7", "R2-488-Ndnf",
+                                 "R2-514-Hpse", "R2-561-Pthlh", "R2-594-Chat",
+                                 "R2-638-Tac1"]
+    assert "R1-594-gene_2" not in cxg.columns and not any(
+        "gene_" in c for c in cxg.columns)
+
+    proc = _json.loads((out / "processing.json").read_text())
+    dp = [d for d in (proc.get("processing_pipeline") or proc)["data_processes"]
+          if d["name"] == "Image spot spectral unmixing"][-1]
+    assert dp["parameters"]["rounds_from_superseded_spot_index"] == ["R1"]
+    assert dp["input_location"][0].endswith("mixed_spots_R-1.pkl")
+    assert dp["input_location"][1].endswith("mixed_spots_R2.pkl")   # R2 took the right one
+
+    man = _json.loads((out / "asset_manifest.json").read_text())
+    assert "NOTE:" in man["description"] and "594" in man["description"]

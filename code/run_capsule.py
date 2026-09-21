@@ -193,12 +193,14 @@ def _superseded_note(spot_tables):
     if not rounds:
         return None
     return (f"NOTE: {', '.join(rounds)} read from mixed_spots_R-1.pkl, the January "
-            f"2026 spot-detection output written before the round index was "
-            f"corrected upstream. It is that asset's own round, and it is the only "
-            f"spot table the asset holds; every other round here uses the later "
-            f"rewrite. On mice carrying both versions the rewrite changed R1 "
-            f"materially, so treat these rounds as a different processing vintage "
-            f"when comparing across animals.")
+            f"2026 spot-detection output, written before the round index was "
+            f"corrected upstream and the only spot table that asset holds. Gene "
+            f"names are unaffected -- they come from the round's gene_dict, not from "
+            f"the spot file. For R2-R5 the January and March runs agree to within "
+            f"0.5% per channel. R1 differs: the January run also detected spots in "
+            f"594 (Syto59, a nuclear stain) and the March rerun dropped it, so "
+            f"unmixing here is restricted to the channels the gene map names and "
+            f"594 spots are excluded, reproducing the March channel set.")
 
 
 def discover_rounds_from_processed(data_dir, mouse_id):
