@@ -185,13 +185,13 @@ the last count.
 
 **Subclass is untouched: agreement 1.0000** on the 10,532 cells inhibitory in both arms.
 
-**Class moves for 389 of 115,095 shared cells (0.34%), and the mechanism is fully
+**Class moves for 390 of 115,095 shared cells (0.34%), and the mechanism is fully
 accounted for.** The class call is a mixture fitted to whatever cells clear the floor,
 so a wider population moves the gates. The upper gate went from **−1.033 to −0.832** in
 log2((Gad2+1)/(Slc17a7+1)) — stricter — while the lower gate barely moved (−2.204 to
 −2.190). Every one of the 364 `inhibitory -> ambiguous` cells has a log-ratio inside
 that swept band (min −1.032, max −0.832): no cell changed class for any other reason.
-The remaining flips are 23 `ambiguous -> excitatory` and 3 singletons.
+The remaining 26 are 23 `ambiguous -> excitatory` and 3 singletons (364 + 23 + 3 = 390).
 
 Net, the inhibitory population grows: 1,029 recovered cells join, 364 marginal ones
 become ambiguous, +665 overall.
