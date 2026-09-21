@@ -2249,3 +2249,29 @@ def test_two_reprocessings_of_one_round_is_an_error_not_a_coin_flip(tmp_path):
     with pytest.raises(SystemExit) as e:
         spots_io.find_spot_table("R1", "800995", tmp_path, source="processed")
     assert "not interchangeable" in str(e.value)
+
+
+def test_a_superseded_R_minus_1_table_is_named_not_used(tmp_path, capsys):
+    """Every 7xxxxx processed asset also holds mixed_spots_R-1.pkl, a Jan-2026 output
+    written with a broken round index. Where both exist they are the same size except
+    at R1, where the later rewrite changed the output by ~20% -- so R-1 is an older
+    result, not an alias. 782149 R1 has ONLY the old copy, which is why that round is
+    unavailable rather than merely misnamed."""
+    import run_capsule as rc
+
+    d = tmp_path / "HCR_782149_2025-11-05_13-00-00_processed_2025-11-10_20-37-29"
+    (d / "image_spot_spectral_unmixing").mkdir(parents=True)
+    (d / "image_spot_spectral_unmixing" / "mixed_spots_R-1.pkl").write_bytes(b"x")
+    (d / "processing_manifest.json").write_text(json.dumps({"round": 1}))
+
+    ok = tmp_path / "HCR_782149_2025-11-12_13-00-00_processed_2025-11-13_22-04-32"
+    (ok / "image_spot_spectral_unmixing").mkdir(parents=True)
+    (ok / "image_spot_spectral_unmixing" / "mixed_spots_R2.pkl").write_bytes(b"x")
+    (ok / "image_spot_spectral_unmixing" / "mixed_spots_R-1.pkl").write_bytes(b"x")
+    (ok / "processing_manifest.json").write_text(json.dumps({"round": 2}))
+
+    rounds, _ = rc.discover_rounds_from_processed(tmp_path, "782149")
+    assert rounds == ["R2"]                      # R1 excluded, R2 unaffected by its R-1
+    msg = capsys.readouterr().out
+    assert "declares round 1" in msg and "mixed_spots_R-1.pkl" in msg
+    assert "superseded" in msg

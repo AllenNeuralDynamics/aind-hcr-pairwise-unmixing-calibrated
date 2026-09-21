@@ -204,6 +204,24 @@ def discover_rounds_from_processed(data_dir, mouse_id):
         rk = f"R{int(n)}"
         if (spots / f"mixed_spots_{rk}.pkl").exists():
             out[rk] = man.parent.name
+        else:
+            # The asset says it is this round but carries no spot table under that
+            # name. Say what IS there, because the one case seen in the wild is not
+            # an empty folder: every 7xxxxx asset also holds a mixed_spots_R-1.pkl
+            # written in Jan 2026 with a broken round index, superseded by a Feb/Mar
+            # rewrite under the correct name. Where both exist they are byte-for-byte
+            # the same size except at R1, where the rewrite changed the output by
+            # ~20% -- so the R-1 copy is an older result, not an alias, and must not
+            # be silently substituted. 782149 R1 has only the old copy.
+            present = sorted(p.name for p in spots.glob("mixed_spots_*.pkl")) \
+                if spots.is_dir() else []
+            print(f"WARNING: {man.parent.name} declares round {int(n)} but has no "
+                  f"mixed_spots_{rk}.pkl"
+                  + (f"; it holds {', '.join(present)}. A 'R-1' file is a superseded "
+                     f"Jan-2026 output with a broken round index and is NOT used -- "
+                     f"this round needs reprocessing, or run --spots-from pairwise."
+                     if any("R-1" in p for p in present)
+                     else f"; folder holds {present or 'nothing'}."), flush=True)
     return sorted(out, key=lambda r: int(r[1:])), out
 
 
