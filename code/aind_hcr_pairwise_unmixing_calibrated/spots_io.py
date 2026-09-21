@@ -30,6 +30,7 @@ The row difference is why this is a branch and not a patch: more input spots mea
 different cell x gene table, and which spot set is correct is a question about the
 upstream filter, not about this code.
 """
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -76,6 +77,43 @@ def describe_schema(frame):
     )
 
 
+def _processed_spot_table(data_dir, mouse_id, round_key):
+    """The one processed asset for THIS mouse holding THIS round's spot table.
+
+    Two guards, both learned the hard way. The candidate set is scoped to the mouse,
+    because an unscoped glob will happily return another animal's table. And where a
+    candidate's `processing_manifest.json` declares a round, that declaration decides
+    -- the filename is a label, the manifest is the asset's own statement about what
+    it contains.
+
+    Raises when more than one asset survives. Several reprocessing versions of the
+    same round exist in the bucket and they are NOT interchangeable; choosing between
+    them by sort order is the bug this function was written to remove, so an ambiguous
+    mount set is an error the caller has to resolve by attaching one.
+    """
+    want = int("".join(ch for ch in str(round_key) if ch.isdigit()))
+    hits = []
+    for cand in sorted(data_dir.glob(
+            f"*{mouse_id}*/image_spot_spectral_unmixing/mixed_spots_{round_key}.pkl")):
+        man = cand.parent.parent / "processing_manifest.json"
+        declared = None
+        if man.exists():
+            try:
+                with open(man) as fh:
+                    declared = json.load(fh).get("round")
+            except (OSError, ValueError):
+                declared = None
+        if declared is None or int(declared) == want:
+            hits.append(cand)
+    if len(hits) > 1:
+        raise SystemExit(
+            f"{round_key}: {len(hits)} processed assets for {mouse_id} carry this "
+            f"round's spot table, and they are not interchangeable:\n  "
+            + "\n  ".join(str(h.parent.parent.name) for h in hits)
+            + "\nAttach exactly one per round.")
+    return hits[0] if hits else None
+
+
 def find_spot_table(round_key, mouse_id, data_dir, source="auto", asset_dir=None):
     """Path to a round's spot table. source in auto / pairwise / processed.
 
@@ -95,11 +133,13 @@ def find_spot_table(round_key, mouse_id, data_dir, source="auto", asset_dir=None
                 pw = cand
                 break
 
-    pr = None
-    for cand in sorted(data_dir.glob(
-            f"*/image_spot_spectral_unmixing/mixed_spots_{round_key}.pkl")):
-        pr = cand
-        break
+    # Scoped to the mouse, and the round is confirmed from the asset's own manifest
+    # rather than trusted from the filename. The first version of this globbed
+    # `*/image_spot_spectral_unmixing/...` across every mount and took the first
+    # sorted hit: with two mice attached that silently read HCR_800792 for a run
+    # invoked with --mouse-id 800995, and produced a complete, plausible, entirely
+    # wrong asset. Alphabetical order decided which mouse's data a run used.
+    pr = _processed_spot_table(data_dir, mouse_id, round_key)
 
     if source == "pairwise":
         if pw is None:

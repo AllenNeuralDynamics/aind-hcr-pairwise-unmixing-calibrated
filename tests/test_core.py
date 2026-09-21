@@ -2194,3 +2194,58 @@ def test_no_module_function_references_an_undefined_name():
                 offenders.append(f"{mod.__name__}.{name}: {u}")
     assert not offenders, "functions read names that are not defined: " + "; ".join(
         sorted(offenders))
+
+
+# ------------------------------------------- spot tables must belong to the mouse
+#
+# A real run invoked with --mouse-id 800995, with 800792 also mounted, read all six
+# of 800792's spot tables and produced a complete cell x gene table, h5ad, plots and
+# metadata under the name HCR_800995_unmixed-calibrated_*. The processed branch of
+# find_spot_table globbed */image_spot_spectral_unmixing/... across every mount and
+# took the first sorted hit, so alphabetical order chose which animal's data a run
+# used. Nothing in the output looked wrong.
+
+def _mk_spot_asset(root, mouse, acq, reproc, rnd, with_manifest=True):
+    d = root / f"HCR_{mouse}_{acq}_processed_{reproc}"
+    (d / "image_spot_spectral_unmixing").mkdir(parents=True)
+    (d / "image_spot_spectral_unmixing" / f"mixed_spots_R{rnd}.pkl").write_bytes(b"x")
+    if with_manifest:
+        (d / "processing_manifest.json").write_text(json.dumps({"round": rnd}))
+    return d
+
+
+def test_processed_spots_never_come_from_another_mouse(tmp_path):
+    from aind_hcr_pairwise_unmixing_calibrated import spots_io
+
+    # 800792 sorts first -- the exact configuration that produced the bad run.
+    _mk_spot_asset(tmp_path, "800792", "2026-03-12", "2026-03-16", 1)
+    want = _mk_spot_asset(tmp_path, "800995", "2026-03-12", "2026-03-17", 1)
+
+    got, family = spots_io.find_spot_table("R1", "800995", tmp_path, source="processed")
+    assert family == "processed"
+    assert "HCR_800995_" in str(got) and "HCR_800792_" not in str(got)
+    assert got == want / "image_spot_spectral_unmixing" / "mixed_spots_R1.pkl"
+
+
+def test_a_round_is_taken_from_the_asset_that_declares_it(tmp_path):
+    """Filename says R1 in both; only one manifest declares round 1."""
+    from aind_hcr_pairwise_unmixing_calibrated import spots_io
+
+    d = tmp_path / "HCR_800995_2026-03-12_processed_2026-03-16"
+    (d / "image_spot_spectral_unmixing").mkdir(parents=True)
+    (d / "image_spot_spectral_unmixing" / "mixed_spots_R1.pkl").write_bytes(b"x")
+    (d / "processing_manifest.json").write_text(json.dumps({"round": 4}))
+    right = _mk_spot_asset(tmp_path, "800995", "2026-03-18", "2026-03-23", 1)
+
+    got, _ = spots_io.find_spot_table("R1", "800995", tmp_path, source="processed")
+    assert got.parent.parent == right
+
+
+def test_two_reprocessings_of_one_round_is_an_error_not_a_coin_flip(tmp_path):
+    from aind_hcr_pairwise_unmixing_calibrated import spots_io
+
+    _mk_spot_asset(tmp_path, "800995", "2026-03-12", "2026-03-17", 1)
+    _mk_spot_asset(tmp_path, "800995", "2026-03-12", "2026-07-15", 1)
+    with pytest.raises(SystemExit) as e:
+        spots_io.find_spot_table("R1", "800995", tmp_path, source="processed")
+    assert "not interchangeable" in str(e.value)
