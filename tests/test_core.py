@@ -2323,3 +2323,46 @@ def test_superseded_rounds_reach_the_provenance():
             r for r, v in tables.items() if v.get("superseded_round_index"))},
         outputs={"cellxgene": "x.csv"}, notes="")
     assert dp["parameters"]["rounds_from_superseded_spot_index"] == ["R1"]
+
+
+def test_unmixing_is_restricted_to_the_rounds_mapped_channels():
+    """782149 R1's only spot table is the January 2026 one, which detected spots in
+    594 (Syto59, a nuclear stain) as well as 488/561 and named its genes gene_0..2.
+    The March rerun on the mice that got one dropped 594 from R1. Unmixing over the
+    gene map's channels reproduces that, so 782149 R1 is crosstalk-corrected over the
+    same two channels as 788406 and 790322 rather than against a structural stain.
+    Everywhere else the mapped channels are exactly the table's channels."""
+    import numpy as _np
+    from aind_hcr_pairwise_unmixing_calibrated import pipeline, spots_io
+
+    rng = _np.random.default_rng(0)
+    n = 300
+    three = ["488", "561", "594"]
+    spots = pd.DataFrame({
+        "spot_id": [f"{c}_{i}" for i, c in enumerate(rng.choice(three, n))],
+        "chan": rng.choice(three, n), "chan_spot_id": _np.arange(n),
+        "cell_id": rng.integers(1, 30, n), "round": 1,
+        "z": rng.random(n), "y": rng.random(n), "x": rng.random(n),
+        "dist": rng.random(n), "r": rng.random(n)})
+    for c in three:
+        spots[f"chan_{c}_fg"] = rng.random(n) + 1
+        spots[f"chan_{c}_bg"] = rng.random(n) * 0.1
+        spots[f"chan_{c}_intensity"] = spots[f"chan_{c}_fg"] - spots[f"chan_{c}_bg"]
+
+    assert set(spots_io.channel_columns(spots, "fg")) == set(three)
+
+    gene_map = {"488": "GFP", "561": "Slc17a7"}          # R1, as the manifest gives it
+    mapped = [c for c in pipeline.CHANS if c in set(map(str, gene_map))]
+    assert mapped == ["488", "561"]
+
+    # Rows in an unmapped channel must be dropped, not merely excluded from the
+    # channel list: detection_index maps every spot's `chan` into that list.
+    kept = spots[spots["chan"].astype(str).isin(mapped)].copy()
+    assert 0 < len(kept) < len(spots)
+    out = pipeline.run_round(kept, {c: 10.0 for c in mapped}, gene_map, "R1",
+                             channels=mapped)
+    # The long-format cell x gene table names only the two mapped genes.
+    labels = set(out["cellxgene"]["round_chan_gene"].unique())
+    assert labels <= {"R1-488-GFP", "R1-561-Slc17a7"}
+    assert not any("594" in l for l in labels)
+    assert (out["spots"]["chan"].astype(str).isin(mapped)).all()

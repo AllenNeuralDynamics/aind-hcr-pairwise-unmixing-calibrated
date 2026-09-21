@@ -87,7 +87,8 @@ def run_round(spots, powers, gene_map, round_key, B_ctrl=None,
         # columns, so only the log line was wrong -- but a log line that misstates
         # how many channels were read is exactly what nobody re-checks.
         print(f"  fg/bg: native columns on the spot table "
-              f"({len(spots_io.channel_columns(spots, 'fg'))} channels); "
+              f"({len(set(spots_io.channel_columns(spots, 'fg')) & set(channels))}"
+              f" channels); "
               f"join skipped", flush=True)
     elif diag_paths:
         fg, bg = attach_fg_bg(spots, diag_paths, channels)
@@ -305,7 +306,26 @@ def run_mouse(asset_dir, mouse_id, rounds, gene_maps, processed_root=None,
                 f"no laser power for {mouse_id} {round_key}: acquisition.json not found "
                 "and no explicit powers given. Power must come from the round's own "
                 "acquisition metadata -- a stored table from another mouse is wrong.")
+        # Unmix only the channels this round's gene map names. Everywhere else this
+        # is a no-op -- the spot table holds exactly the mapped channels -- but
+        # 782149 R1's only spot table is the January 2026 one, which also detected
+        # spots in 594 (Syto59, the nuclear stain) and named its genes gene_0..2.
+        # The March rerun on the mice that got one dropped 594 from R1; following
+        # that keeps 782149's R1 unmixed over the same two channels as theirs
+        # instead of additionally crosstalk-correcting against a structural stain.
+        round_chans = [c for c in CHANS if c in set(map(str, gene_maps[round_key]))]
+        extra = sorted(set(map(str, spots["chan"].unique())) - set(round_chans))
+        if extra and round_chans:
+            # Drop the rows too, not just the channel list: `detection_index` maps
+            # every spot's `chan` into the channel set, so an unmapped channel is a
+            # KeyError rather than an ignored column.
+            before = len(spots)
+            spots = spots[spots["chan"].astype(str).isin(round_chans)].copy()
+            print(f"  channels: {extra} detected in the spot table but absent from "
+                  f"{round_key}'s gene map; dropped {before - len(spots):,} of "
+                  f"{before:,} spots, unmixing over {round_chans}", flush=True)
         res = run_round(spots, powers, gene_maps[round_key], round_key,
+                        channels=round_chans or CHANS,
                         diag_paths=(diag if use_fgbg else None), **unmix_kw)
         for frame in (res["separability"], res["decisions"]):
             frame.insert(0, "round", round_key)
