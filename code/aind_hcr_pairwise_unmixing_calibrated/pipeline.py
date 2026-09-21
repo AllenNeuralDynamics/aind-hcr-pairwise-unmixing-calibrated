@@ -15,6 +15,7 @@ from . import core
 from .control import CHANS, control_matrix, load_powers, resolve_dataset_folder
 from . import metadata
 from .fgbg import attach_fg_bg, diagonal_stats_path
+from . import spots_io
 
 
 def _native_fg_bg(spots, channels):
