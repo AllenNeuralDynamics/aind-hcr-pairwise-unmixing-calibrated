@@ -2096,3 +2096,48 @@ def test_unfitted_entries_are_nan_not_zero(tmp_path):
     inh_genes = [i for i, v in enumerate(ad.var_names)
                  if A.gene_name(v) in A.HCR_PANEL_15]
     assert _np.isfinite(xc[_np.ix_(inh_rows, inh_genes)]).any()
+
+
+# --------------------------------------------- provenance of the spot source
+#
+# Caught on a real registered-asset dry run: a --spots-from processed run wrote a
+# processing.json whose input_location listed the PAIRWISE asset paths, and an
+# asset_manifest.json crediting the pairwise asset with "mixed spot tables". Neither
+# was read. processing.json travels inside the registered asset, so it is the
+# machine-readable claim a future reader trusts about which spot set produced the
+# numbers -- and the two sets differ by ~22% in cells on 800792.
+
+def test_manifest_credits_the_processed_assets_when_spots_came_from_them():
+    from aind_hcr_pairwise_unmixing_calibrated import manifest as M
+
+    inputs = {"unmixing": ["HCR_800792_pairwise-unmixing_2026-06-29_17-49-19"],
+              "processed": ["HCR_800792_2026-03-12_13-00-00_processed_2026-03-16_20-26-08"],
+              "raw": ["HCR_800792_2026-03-12_13-00-00"], "other_mouse": []}
+
+    proc = M.build_description("800792", ["R1"], inputs, spots_from="processed")
+    assert "SPOT TABLES" in proc
+    pair_line = next(l for l in proc.splitlines() if "pairwise-unmixing asset" in l.lower())
+    assert "NO spot table was read" in pair_line
+
+    pw = M.build_description("800792", ["R1"], inputs, spots_from="pairwise")
+    assert "Unmixing input (mixed spot tables)" in pw
+    assert "NO spot table was read" not in pw
+
+
+def test_processing_json_records_the_paths_actually_read():
+    """input_location must come from the per-round schema the run recorded, not from
+    the pairwise asset directory."""
+    from aind_hcr_pairwise_unmixing_calibrated import metadata as MD
+
+    schemas = {"R1": {"family": "processed",
+                      "path": "/data/HCR_800792_..._processed_.../"
+                              "image_spot_spectral_unmixing/mixed_spots_R1.pkl"}}
+    dp = MD.unmixing_data_process(
+        input_locations=[schemas["R1"]["path"]],
+        output_location="/results",
+        parameters={"rounds": ["R1"], "mouse_id": "800792",
+                    "spots_from": sorted({s["family"] for s in schemas.values()})},
+        outputs={"cellxgene": "800792_cellxgene.csv"}, notes="")
+    assert dp["input_location"] == [schemas["R1"]["path"]]
+    assert "pairwise-unmixing" not in " ".join(dp["input_location"])
+    assert dp["parameters"]["spots_from"] == ["processed"]

@@ -53,8 +53,15 @@ def _bullet(title, names):
 
 
 def build_description(mouse_id, rounds, inputs, n_cells=None, n_genes=None,
-                      capsule_name=None, extra=None):
-    """Human-readable description naming every input asset the run consumed."""
+                      capsule_name=None, extra=None, spots_from=None):
+    """Human-readable description naming every input asset the run consumed.
+
+    `spots_from` decides which mount is credited with the spot tables, and getting it
+    wrong is not cosmetic: the description is what a future reader uses to know which
+    spot set produced the numbers, and the two sets differ by ~22% in cells. Before
+    this argument existed the pairwise asset was credited unconditionally, so a
+    processed-only run shipped a description asserting an input it never read.
+    """
     lines = [
         f"Spectrally unmixed spot tables and cell x gene table for mouse {mouse_id}, "
         f"rounds {', '.join(rounds)}.",
@@ -65,9 +72,20 @@ def build_description(mouse_id, rounds, inputs, n_cells=None, n_genes=None,
         lines.append(f"Produced by {capsule_name}.")
     lines.append("")
     lines.append("INPUT DATA ASSETS")
-    lines.append(_bullet("Unmixing input (mixed spot tables)", inputs["unmixing"]).rstrip())
-    lines.append(_bullet("Processed assets (acquisition.json, image_spot_detection fg/bg)",
-                         inputs["processed"]).rstrip())
+    if spots_from == "processed":
+        lines.append(_bullet(
+            "Processed assets - SPOT TABLES (image_spot_spectral_unmixing/"
+            "mixed_spots_<R>.pkl), acquisition.json, and native fg/bg",
+            inputs["processed"]).rstrip())
+        lines.append(_bullet(
+            "Pairwise-unmixing asset - mounted, but NO spot table was read from it",
+            inputs["unmixing"]).rstrip())
+    else:
+        lines.append(_bullet("Unmixing input (mixed spot tables)",
+                             inputs["unmixing"]).rstrip())
+        lines.append(_bullet(
+            "Processed assets (acquisition.json, image_spot_detection fg/bg)",
+            inputs["processed"]).rstrip())
     lines.append(_bullet("Raw acquisition assets", inputs["raw"]).rstrip())
     if inputs["other_mouse"]:
         lines.append("")
@@ -93,7 +111,7 @@ def asset_name(mouse_id, creation_time=None, process_slug=PROCESS_SLUG):
 def write_manifest(output_dir, mouse_id, rounds, data_dir="/root/capsule/data",
                    n_cells=None, n_genes=None, creation_time=None,
                    capsule_name=None, tags=DEFAULT_TAGS, experimenter=None,
-                   extra_description=None):
+                   extra_description=None, spots_from=None):
     """Write results/asset_manifest.json. Returns the manifest dict."""
     t = creation_time or datetime.now(timezone.utc)
     data_p = Path(data_dir)
@@ -105,7 +123,8 @@ def write_manifest(output_dir, mouse_id, rounds, data_dir="/root/capsule/data",
         "mount": name,
         "tags": list(tags),
         "description": build_description(mouse_id, rounds, inputs, n_cells, n_genes,
-                                         capsule_name, extra_description),
+                                         capsule_name, extra_description,
+                                         spots_from=spots_from),
         "custom_metadata": {
             "data level": "derived",
             "experiment type": "HCR",
@@ -116,6 +135,7 @@ def write_manifest(output_dir, mouse_id, rounds, data_dir="/root/capsule/data",
         },
         "input_assets": inputs,
         "rounds": list(rounds),
+        "spots_from": spots_from,
         "process_name": PROCESS_SLUG,
         "creation_time": t.isoformat().replace("+00:00", "Z"),
     }

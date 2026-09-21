@@ -637,7 +637,13 @@ def main(argv=None):
             n_genes=res["cellxgene"].shape[1],
             creation_time=res.get("creation_time"),
             capsule_name="aind-hcr-pairwise-unmixing-calibrated",
-            experimenter=args.experimenter)
+            experimenter=args.experimenter,
+            # Which spot set this asset was built from. Resolved, not the raw flag:
+            # "auto" names no asset family, and the manifest has to say which one was
+            # actually read.
+            spots_from=next(iter({s["family"] for s
+                                  in (res.get("spot_tables") or {}).values()}),
+                            args.spots_from))
         used = man["input_assets"]
         print(f"\nasset manifest: {man['name']}")
         print(f"  inputs: {len(used['unmixing'])} unmixing, "
